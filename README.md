@@ -1,6 +1,6 @@
 # Undertow — a woodcut tactics game for the Arduboy FX
 
-![Undertow title screen](screenshots/01_title.png)
+![Undertow title screen](01_title.png)
 
 A border lord chases bandits across a river, and every trail ends in a neighbouring kingdom's silver.
 **Undertow** is a Fire Emblem–style tactics game drawn in 1-bit woodcut, for the Arduboy FX and FX-C.
@@ -10,9 +10,9 @@ planned 22-chapter campaign.
 
 | | |
 |---|---|
-| ![map](screenshots/04_map.png) | ![forecast](screenshots/05_forecast.png) |
-| ![battle](screenshots/06_battle.png) | ![dialogue](screenshots/03_dialogue.png) |
-| ![deploy](screenshots/07_deploy.png) | ![forest battle](screenshots/09_forest_battle.png) |
+| ![map](04_map.png) | ![forecast](05_forecast.png) |
+| ![battle](06_battle.png) | ![dialogue](03_dialogue.png) |
+| ![deploy](07_deploy.png) | ![forest battle](09_forest_battle.png) |
 
 ## What's in it
 - Turn-based tactics on 24×16 maps, with terrain, a weapon triangle (sword > axe > lance > sword), bows at range and double attacks
@@ -25,7 +25,7 @@ planned 22-chapter campaign.
 - Villages, chests, tripwires and ambushes
 - Sound effects and music cues; saves at the start of every chapter
 
-## Files (in [`demo/`](demo))
+## Files
 
 | File | What it's for |
 |---|---|
