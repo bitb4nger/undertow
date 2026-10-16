@@ -1,6 +1,6 @@
 # Undertow — a woodcut tactics game for the Arduboy FX
 
-![Undertow title screen](screenshots/01_title.png)
+![Undertow title screen](01_title.png)
 
 A border lord chases bandits across a river, and every trail ends in a neighbouring kingdom's silver.
 **Undertow** is a Fire Emblem–style tactics game drawn in 1-bit woodcut, for the Arduboy FX and FX-C.
@@ -11,12 +11,12 @@ It's about half of a planned 22-chapter campaign.
 
 | | |
 |---|---|
-| ![map](screenshots/04_map.png) | ![forecast](screenshots/05_forecast.png) |
-| ![battle](screenshots/06_battle.png) | ![dialogue](screenshots/03_dialogue.png) |
-| ![Black Sails](screenshots/10_black_sails.png) | ![ship deck](screenshots/11_ship_deck.png) |
-| ![sea horror](screenshots/12_sea_horror.png) | ![spell](screenshots/13_spell.png) |
-| ![shop](screenshots/15_shop.png) | ![wagon](screenshots/16_wagon.png) |
-| ![minimap](screenshots/14_minimap.png) | ![chapter clear](screenshots/17_chapter_clear.png) |
+| ![map](04_map.png) | ![forecast](05_forecast.png) |
+| ![battle](06_battle.png) | ![dialogue](03_dialogue.png) |
+| ![Black Sails](10_black_sails.png) | ![ship deck](11_ship_deck.png) |
+| ![sea horror](12_sea_horror.png) | ![spell](13_spell.png) |
+| ![shop](15_shop.png) | ![wagon](16_wagon.png) |
+| ![minimap](14_minimap.png) | ![chapter clear](17_chapter_clear.png) |
 
 ## What's in it
 - Turn-based tactics on 24×16 maps: terrain, a weapon triangle (sword > axe > lance > sword), bows at range, double attacks
@@ -32,7 +32,7 @@ It's about half of a planned 22-chapter campaign.
 - Woodcut battle scenes with backgrounds that follow the terrain; EXP, level-ups and promotions (Hero Crests)
 - Deployment, trading and item discards before each chapter; sound and music; saves at the start of every chapter
 
-## Files (in [`demo/`](demo))
+## Files
 
 | File | What it's for |
 |---|---|
