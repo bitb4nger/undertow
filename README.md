@@ -5,9 +5,9 @@
 A border lord chases bandits across a river, and every trail ends in a neighbouring kingdom's silver.
 **Undertow** is a Fire Emblem–style tactics game drawn in 1-bit woodcut, for the Arduboy FX and FX-C.
 
-**v0.3:** chapters 1–13 plus four hidden side chapters. That covers the river border, the walls and
-vaults of Dainholt, a battle on the deck of a pirate ship and the first landing on strange shores.
-It's about half of a planned 22-chapter campaign.
+**v0.4:** chapters 1–18 plus six hidden side chapters. That covers the river border, the walls and
+vaults of Dainholt, a battle on the deck of a pirate ship, and the island of Vael: a rebellion, the salt
+flats and the first demon gate. Four chapters of a planned 22 remain.
 
 | | |
 |---|---|
@@ -17,6 +17,8 @@ It's about half of a planned 22-chapter campaign.
 | ![sea horror](12_sea_horror.png) | ![spell](13_spell.png) |
 | ![shop](15_shop.png) | ![wagon](16_wagon.png) |
 | ![minimap](14_minimap.png) | ![chapter clear](17_chapter_clear.png) |
+| ![Cliff Village](18_cliff_village.png) | ![sea-eagle rider](19_saoirse.png) |
+| ![the Gatekeeper](20_gatekeeper.png) | ![Lir](21_lir.png) |
 
 ## What's in it
 - Turn-based tactics on 24×16 maps: terrain, a weapon triangle (sword > axe > lance > sword), bows at range, double attacks
@@ -24,8 +26,11 @@ It's about half of a planned 22-chapter campaign.
 - Permadeath with **last words**: every hero gets a death line, so you never miss a loss on the enemy turn
 - **Chapter clear screen:** see who fell, then choose ONWARD or RESTART the chapter
 - **Gold, shops and a wagon:** villages and bosses pay out, town chapters have a shop on the prep screen, and anything that won't fit in a bag goes to the wagon
-- **Fine weapons wear out:** silver weapons, the Killer Bow, Thunder and the Mend Staff have uses; iron and steel never break
-- Recruits: rescue captives, and talk enemy soldiers into joining (only the right hero can)
+- **Fine weapons wear out:** silver weapons, the Killer Bow, Thunder and the Mend staff have uses; iron and steel never break
+- **Crits find the gap:** a critical hit never does less than STR + weapon might, so killer weapons can hurt armoured bosses
+- **Eight boosters** in the whole game (+2 STR, SKL, SPD or DEF, +5 HP, and one pair of Winged Boots for +1 MOV), hidden where exploring pays
+- **Smart staves:** the menu says HEAL or MEND, and the healer uses the weakest staff that covers the wound
+- Recruits: rescue captives, and talk enemy soldiers into joining (only the right hero can), including a sea-eagle rider with the widest move in the game
 - Hidden side chapters, unlocked by what you do and find in earlier chapters
 - A **ship battle**: hold the deck against boarders and things from the sea
 - **Hold B for a minimap** that shows every unit as a flashing dot
@@ -52,7 +57,7 @@ screen with the red LED lit means the FX data is missing or the wrong .hex is lo
 **Adding it to your FX / FX-C cart:** with Mr.Blinky's Arduboy-Python-Utilities:
 1. Back up your cart with `flashcart-backup.py`, then unpack it with `flashcart-decompiler.py`.
 2. Add a row to the CSV:
-   `1;Undertow;Undertow/cart-menu.png;Undertow/Undertow-FXC.hex;Undertow/Undertow-data.bin;;0.3;bitb4nger;Woodcut tactics;`
+   `1;Undertow;Undertow/cart-menu.png;Undertow/Undertow-FXC.hex;Undertow/Undertow-data.bin;;0.4;bitb4nger;Woodcut tactics;`
    Use `Undertow-FX.hex` on an original FX.
 3. Rebuild with `flashcart-builder.py` and write it with `flashcart-writer.py`.
 
@@ -75,7 +80,13 @@ bootloader, then upload.
 
 Each unit does one thing per turn: attack, cast, heal, talk, visit, use an item, or wait.
 
-## Changes since v0.1
+## Changes in v0.4
+- Chapters 14–18, plus side chapters 13X and 17X; four new recruits (Saoirse, Thane, Hesk, Lir)
+- Crit floor (crits ignore armour down to STR + might), eight stat boosters, smart HEAL/MEND staves
+- Armoured bosses (Aldric, the dockmaster) a little less armoured
+- Saves from v0.3 carry over: the new heroes are added when you continue
+
+## Changes in v0.3
 - Chapters 7–13, plus side chapters 7X and 10X; two new recruits
 - Mage → Sage line, tomes, Mend Staff
 - Durability on fine weapons; gold, town shops and the wagon; much rarer vulneraries, crests and silver
@@ -83,4 +94,4 @@ Each unit does one thing per turn: attack, cast, heal, talk, visit, use an item,
 - Smaller music data and a leaner build to make room for all of it
 
 ## Feedback
-Tell me what's too hard, too easy, confusing, or broken. Chapters 11–13 (Saltmarch, Black Sails, Strange Shores) are the newest.
+Tell me what's too hard, too easy, confusing, or broken. Chapters 13X–18 are the newest, and the hardest stretch so far.
