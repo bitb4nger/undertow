@@ -10,19 +10,31 @@ MIT licensed (see `LICENSE`): use it, change it, ship it.
    [Arduboy-Python-Utilities](https://github.com/MrBlinky/Arduboy-Python-Utilities) for `fxdata-build.py`):
    `APU=/path/to/Arduboy-Python-Utilities sh tools/build_data.sh`. This regenerates `story.h`, `sfx.h`
    and everything in `fxdata/` from `chapters/`, `tools/chapters/game_data.py` and the art/sound scripts.
-2. **Sketch** (Arduino IDE): install the **Arduboy Homemade** board package (Mr.Blinky), pick board
-   **Arduboy FX-C** (or **Arduboy FX** for the original's flash pin) with the **Arduboy optimized core**.
-   Libraries: Arduboy2 6.0.0, ArduboyFX 1.0.11, ArduboyTones (bundled with the package).
-   Add this line to the board package's `platform.local.txt` or it won't fit:
-   `compiler.c.elf.extra_flags=-mcall-prologues -mrelax -fno-move-loop-invariants`
-3. **Check**: built with avr-gcc 7.3.0 (the package's toolchain), the .hex files and `fxdata-data.bin`
-   come out byte-identical to `release/` -- compare against `release/SHA256SUMS.txt`
-   (`sha256sum -c SHA256SUMS.txt`). A different compiler version gives a different (but equivalent) hex.
+2. **Sketch**, either way:
+   - `HM=/path/to/Arduboy-homemade-package sh tools/build_hex.sh` builds both .hex files into `release/`
+     with exactly the IDE's settings (needs `avr-gcc` on the PATH), or
+   - Arduino IDE: install the **Arduboy Homemade** board package (Mr.Blinky), pick board **Arduboy FX-C**
+     (or **Arduboy FX** for the original's flash pin) with the **Arduboy optimized core**. Libraries:
+     Arduboy2 6.0.0, ArduboyFX 1.0.11 (bundled with the package; ArduboyTones is no longer used). Add
+     this line to the board package's `platform.local.txt` or it won't fit:
+     `compiler.c.elf.extra_flags=-mcall-prologues -mrelax -fno-move-loop-invariants`
+3. **Check**: the FX data (`fxdata-data.bin`) comes out byte-identical to `release/`
+   (`sha256sum -c SHA256SUMS.txt`). The v1.0 .hex files were built by `tools/build_hex.sh` with
+   avr-gcc 7.3.0 as packaged by Debian/Ubuntu (`gcc-avr` 7.3.0+Atmel3.7.0); with that compiler they
+   match too. The IDE's own 7.3.0-atmel3.6.1-arduino7 gives an equivalent hex about 100 bytes smaller.
 
-What the game touches on the device: the screen, buttons, speaker and LEDs; the FX flash chip
-(read-only: art, text, chapters); and EEPROM bytes 80-~500 for the save and the supply wagon, written
-with avr-libc `eeprom_update_*` (only changed bytes are written) at each chapter start and when the
-wagon changes. It's built without the USB stack, so it never talks to a computer: to upload a new
+What the game touches on the device: the screen, buttons, speaker and LEDs; the FX flash chip (art,
+text and chapters, read-only; and the game's own 4 KB save block); and EEPROM bytes 80-~500 for the save
+and the supply wagon, written with avr-libc `eeprom_update_*` (only changed bytes are written) at each
+chapter start and when the wagon changes.
+
+**The save** lives in EEPROM while you play, but EEPROM is shared by every game on the device, and
+other games write over those bytes. So at each chapter start the save (header, army, the turn tally,
+the wagon as it was) is also copied to the game's own save block on the FX chip (`savesection` in
+`fxdata.txt`; one erase and two page writes, last page first so a cut-off write never leaves a valid-
+looking half), and at power-on that copy is put back into EEPROM if it holds a save. Without an FX save
+block (some emulators) the block reads blank and EEPROM is used as before. Flashcart images need the
+game's save file (`Undertow-save.bin`, 4 KB) in the save column, or the cart builder won't reserve it. It's built without the USB stack, so it never talks to a computer: to upload a new
 .hex, hold UP + DOWN while it runs to enter the bootloader.
 
 ## Layout
@@ -66,6 +78,11 @@ wagon changes. It's built without the USB stack, so it never talks to a computer
 | 17 | The Demon Gate | defeat the Gatekeeper | one ford across the chasm and two portals; the gate spills demons every 3 turns until the Gatekeeper falls (he drops an ox horn); Maren can talk to the still Drowned (flag 6, for 17X) |
 | 17X | Secrets Below | seize the stone | only via the still one; Lir joins; galleries that wake hall by hall; the calling stone (flag 13); iron bark in the old chest |
 | 18 | The Coast Road | survive 10 turns | the cult's host from west, east and north in waves; a horned sentry in the tollhouse |
+| 19 | Swamp of Death | seize the far causeway | every pool a tripwire for its own Drowned, the central ones rising again every 4 turns; the hermit's hut (flag 7, for 19X); a sunk strongbox (Silver Axe); the far end's Thunder and Killer Bow drop |
+| 19X | The Great Bell | survive 7 turns | only after the hermit's hut; Oda joins and casts the great bell from the cathedral bronze Aldric melted (flag 14 on turn 7); the cult at the west door, the east door, the river |
+| 20 | The Long Rain | survive 10 turns | open mud, waves from three sides; the low point: Brannock nearly turns back, and whoever is left won't let him |
+| 21 | Blood Fortress | defeat the Hollow King | a breach in the south wall; barracks either side wake on turns 4 and 6 (or when hit); Aelis gets his scene; Silver Sword and Silver Lance in the hall |
+| 22 | The Demon Portal | seize the portal | Nhal holds it; the Drowned rise every 4 turns unless flag 13, the horned come through every 5 unless flag 14, all stop when Nhal falls; the win scene is the ending |
 
 ## Adding a chapter
 1. Copy `chapters/01_drowned_ford.txt` to `chapters/05_whatever.txt` (files load in name order).
@@ -105,15 +122,36 @@ water or walls, two units on one tile, a class carrying no usable weapon, dialog
   the level-up screen as a class change), and promoted classes wield two weapon kinds, move further,
   and count as 10 levels higher for EXP. Promoted units get a pennant on their map sprite and a
   second rim on their shield.
-- **Flags**: 1–16 are story flags saved with the army; 17–24 last one chapter.
+- **Flags**: 1–16 are story flags saved with the army; 17–24 last one chapter. Used: 1-6, 8-13 (side
+  chapters and their payoffs), 7 the hermit's hut (opens 19X), 14 the great bell (Ch 22).
 - **Conditional lines**: any dialogue line can depend on a flag or on a hero being in the army
-  (`[9] GERAULT: ...`, `[!9] ...`, `[CASS] CASS: ...`). Endings and side-chapter fallbacks use them.
+  (`[9] GERAULT: ...`, `[!9] ...`, `[CASS] CASS: ...`), or on a hero having joined and fallen
+  (`[FELL:HALE] ...`); conditions stack (`[!14][MAREN] MAREN: ...` needs both). An extra condition is
+  stored as a guard line (speaker 255, no text) before the line. Endings and side-chapter fallbacks use them.
+- **The ending** is Ch 22's win scene: the sealing (the great bell, else Maren rings the mill bell from
+  the doorway, else Thane, else Brannock himself), the Drowned (at rest with flag 13, Lir with them),
+  a coda for each survivor told by Old Tam back at the mill, and an epitaph for each of the fallen.
+  `ENDINGS=1 ./sim` prints it for five different playthroughs.
+- **The record**: ONWARD after the last chapter shows allies won, heroes lost, side chapters found
+  (story flags in `SIDE_FLAGS`) and turns taken (a tally in EEPROM, added at each ONWARD), and a rank:
+  4 points a side chapter, 2 an ally, -6 a loss, +20 under 230 turns (+10 under 300); S 70, A 54, B 40,
+  C 26, else D (BELLWRIGHT, HOLLIN'S WARDEN, CAPTAIN, SELLSWORD, SURVIVOR).
+- **Status card**: portrait (or battle figure), class, level, EXP as a line under the name, HP, MV, the
+  four stats and the items (a bar marks the weapon in hand, a dot an enemy's drop). A on a hero who has
+  acted or a captive, A again on an enemy's danger zone, ARMY in the game menu, RIGHT on the deployment
+  list; LEFT/RIGHT step through that side. Its fixed parts are an FX image (`card`).
+- **Sound**: the sketch's own player on Timer3 (ArduboyTones drove the pin the same way): `sfx.h` holds
+  (pitch, length) byte pairs, pitch in quarter tones from 27.5 Hz, length in 1/256 s. Half the bytes
+  of the old frequency/duration words, and the library's code is gone too.
 - **Saves** (EEPROM): written at the start of every chapter. Title offers CONTINUE / NEW GAME;
   a defeat offers RETRY from that chapter's start.
 - **Items**: 4 slots per unit. Common weapons and staves (iron, steel, Fire, the heal staff) never wear
   out. Fine ones -- silver, the Killer Bow, Thunder, the Mend Staff (and legendary ones later) -- have
   uses (20 or so); each swing, hit or miss, costs one, and the last breaks it (BROKE! in the battle;
   its wielder stops striking). Potions and crests are used up. Anything that runs out shows a count.
+  Fine weapons are never sold. They come from bosses, chests and villages, a few early and most from
+  Ch 13 on: about a dozen silvers, two Killer Bows and two Thunders over the campaign, so most of the
+  army can carry one by the finale.
 - **Supply wagon**: 24 more slots, kept in EEPROM (no RAM). In the trade table it's six extra
   "heroes" (WAGON 1..6) after the army. A find goes to the finder, else the wagon, else anyone with
   room. The wagon is saved with the chapter, so a restart puts it back too.
@@ -123,8 +161,8 @@ water or walls, two units on one tile, a class carrying no usable weapon, dialog
   crests and other finds are never sold. No selling (yet). The first weapon the class can wield is equipped; ITEM -> A on a weapon
   equips it (free), A on a healing item uses it (ends the turn). Javelins and hand axes reach 1-2
   squares. Enemies can carry drops (`*` in the chapter file) that go to the hero who fells them.
-- **Game menu** (A on an empty tile): END TURN, SOUND, RESTART (this chapter, from its start) and QUIT
-  (to the title). RESTART and QUIT ask "SURE?" first: press A again. Every list wraps: UP from the
+- **Game menu** (A on an empty tile): END TURN, ARMY (the status cards), SOUND, RESTART (this chapter,
+  from its start) and QUIT (to the title). RESTART and QUIT ask "SURE?" first: press A again. Every list wraps: UP from the
   top lands on the bottom.
 - **Map overview**: hold B on the map for the whole battlefield at 4 px a square -- heroes as solid
   blocks (hollow once they've acted), enemies flashing (a steady dot while asleep), the screen's view
@@ -132,9 +170,10 @@ water or walls, two units on one tile, a class carrying no usable weapon, dialog
 - **Last words**: when a hero falls, the battle pauses for their portrait and a line (game_data
   `HEROES[...]['death']`), so an enemy-phase crit can't slip by unnoticed.
 - **Chapter clear**: the end screen names who fell (FELL: HALE +1) and offers ONWARD or RESTART. The
-  chapter's save is only replaced by going ONWARD, so a costly win can be replayed.
+  chapter's save is only replaced by going ONWARD, so a costly win can be replayed. After the last
+  chapter the save stays at its start, so the finale can be replayed for another ending.
 - **Deployment**: before every chapter after the first, tick who fights (up to the chapter's
-  `deploy:`, at most 8); the lord always goes. Benched heroes keep their levels and items. The list
+  `deploy:`, at most 8, or the whole army if that's smaller); the lord always goes. Benched heroes keep their levels and items. The list
   scrolls (the roster holds up to 15 heroes).
 - **Trade** (ITEMS on the deployment screen): two heroes side by side; left/right switches column.
   The name row: A cycles that column's hero. On an item, A picks it up; A on any slot then puts it
@@ -167,23 +206,27 @@ The FX and the FX-C wire the flash chip to different pins. A build for the wrong
 stays black as soon as it touches FX data. In the Arduino IDE pick **Arduboy FX-C** for your
 device; Ardens emulates the original FX unless you add `fxport=e2`.
 
-## Budget (Arduino IDE: Arduboy Homemade package, board "Arduboy FX-C", Arduboy optimized core)
-Flash 29,398 of 29,696 B (298 free) · RAM 2,321 B static (13 heroes) · FX data 147 KB of 16 MB.
+## Budget (board "Arduboy FX-C", Arduboy optimized core, tools/build_hex.sh)
+Flash 29,654 of 29,696 B (42 free) · RAM 2,324 B static (14 heroes) · FX data 172 KB of 16 MB, plus the
+4 KB save block. The IDE's compiler makes the same sketch ~100 B smaller.
 **Build flags**: the release hex is linked with `-mcall-prologues -mrelax -fno-move-loop-invariants`
 (about 1.1 KB + 0.7 KB smaller). In the Arduino IDE put
 `compiler.c.elf.extra_flags=-mcall-prologues -mrelax -fno-move-loop-invariants` in the board
 package's `platform.local.txt`, or the sketch won't fit. The boot-time flashlight / sound combos are left out
 (sound is toggled in game; uploads use UP + DOWN while running).
+**Where v1.0 found room**: the byte-format sound player (-650 B against ArduboyTones and its data), the
+fixed parts of the new screens drawn as FX images (`pages`, `card`) rather than in code, no PROGMEM
+strings (single characters go through `glyph`, words are FX UI strings), and `noinline` on the helpers
+LTO was copying into every caller (found by trying each one and keeping what shrank the build).
 All art, every name (heroes, classes, items, terrain), the UI text, the heroes' starting stats and
 growths, and each name's portrait/voice/figure live on the FX chip (`strings.bin`, `tables.bin`);
 program flash holds the code, each item's kind and each class's weapons and move (read constantly
-by the AI; the rest of those records is on FX) and the sound. Music notes slur into each other (only a
-repeated pitch gets a gap), which halved the sound data. If the FX data is missing (or the build is for the wrong
-flash pin) the game shows a big X and lights the red LED.
+by the AI; the rest of those records is on FX) and the sound. If the FX data is missing (or the build
+is for the wrong flash pin) the game shows a big X and lights the red LED.
 **RAM** is the tight one as the cast grows: every hero is 21 bytes and stays in memory. Measured in
-Ardens, the deepest stack (a tone interrupt landing on the enemy AI) is about 190 bytes. With 13
-heroes static RAM is 2,321 B and the deepest measured stack leaves ~50 B; at 15 heroes ~2,363 B,
-leaving ~10 B to spare -- so the compiler stops at 15 heroes, and
+Ardens (lowest stack pointer over a scripted enemy phase, sound on), the deepest stack is the tone
+interrupt landing in the middle of a frame: 142 bytes, leaving ~90 B above the variables with 14
+heroes (the sound player's RAM is ~20 B less than ArduboyTones'). The compiler stops at 15 heroes, and
 chapters at 10 enemies (reinforcements reuse fallen enemies' slots).
 The sketch is built **without the USB stack** (`#define NO_USB_BUILD`): chapter 3's systems needed the
 2.7 KB it frees. Ardens doesn't care. On the device, the IDE can't reset it for an upload any more:
@@ -207,5 +250,12 @@ python3 make_test_fx.py && TESTS=1 FXDATA=test_fxdata.bin ./sim
                                # scenario tests: portals, tripwires, talk-to-recruit, spawns,
                                # repeats/until/falls, joins, side-chapter branching, promotion,
                                # needs/needs!, magic (range, half DEF, no dash), sages, clerics,
-                               # crit floor, smart staves, boosters + boots (111 checks)
+                               # crit floor, smart staves, boosters + boots, stacked and
+                               # FELL: conditions, status cards, the FX save mirror and
+                               # restore, the turn tally and rank (132 checks)
+ENDINGS=1 ./sim                # Ch 22's win scene for five different playthroughs
+UISHOTS=1 ./sim; SHOWCASE=1 ./sim   # screenshots (shots/) of the item list, deployment count,
+                               # and the v1.0 content (README screenshots 22-29)
 ```
+The bot (`botInput`) heads for a boss standing on a seize square, and in seize chapters that run past
+turn 12 / 20 the lord and then everyone push for the objective, so respawning chapters can't stall it.

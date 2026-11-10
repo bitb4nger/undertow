@@ -43,6 +43,8 @@ CAST = {
     'brigid':   dict(hair='veil', scar=True),                        # the island's rebel leader
     'vey':      dict(helm=True, frown=True, armor=True, build=1),    # captain of the cult's garrison
     'gatekeeper': dict(hair='veil', frown=True, crown=True, hollow=True, build=2),   # what guards the first gate
+    'oda':      dict(hair='cap', beard='full', scar=True, build=2),   # the last bellwright: a smith's cap, burn-scarred
+    'nhal':     dict(hair='long', dark=True, crown=True, hollow=True, build=3),     # what pulls from under the cathedral
 }
 
 

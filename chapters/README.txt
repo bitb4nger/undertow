@@ -104,6 +104,12 @@ SPEAKER: text            '/' breaks a line; 17 characters per line,
 [N] SPEAKER: text        only if flag N is set      [!N] only if it isn't
 [HERO] SPEAKER: text     only if HERO is in the army (joined, not fallen)
 [!HERO] SPEAKER: text    only if they aren't
+[FELL:HERO] SPEAKER: ... only if HERO joined and fell (a roll of the dead,
+                         a line remembering them)   [!FELL:HERO] if not
+[A][B] SPEAKER: text     every condition must hold (stack as many as you
+                         like: each extra one costs a line of the 255 a
+                         scene can hold)
                          Works in every scene and village. Use it for
                          endings, and to tell the player what a skipped
-                         side chapter would have shown them.
+                         side chapter would have shown them. A speaker who
+                         may be gone needs their own [HERO] too.

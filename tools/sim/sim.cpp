@@ -1,5 +1,5 @@
 // Headless campaign harness: runs Undertow.ino unchanged against PC
-// stand-ins for Arduboy2Base / ArduboyFX / ArduboyTones / EEPROM, plays whole
+// stand-ins for Arduboy2Base / ArduboyFX / the tone player / EEPROM, plays whole
 // campaigns with a bot that presses real buttons, and checks invariants.
 //
 //   ./sim 300          play 300 campaigns
@@ -31,7 +31,7 @@ uint8_t stepToward(uint8_t tx, uint8_t ty) {
 uint16_t pathD[MAP_N];
 void buildPathDist() {                         // walking distance to the nearest enemy, ignoring units
   for (auto& v : pathD) v = 9999;
-  bool boss = objType == OBJ_BOSS && anyAlive(true, F_BOSS);       // boss chapters: head for the boss
+  bool boss = (objType == OBJ_BOSS || objType == OBJ_SEIZE) && anyAlive(true, F_BOSS);   // boss chapters (or a boss on the seize square): head for the boss
   for (uint8_t e = NUM_HEROES; e < nUnits; e++)
     if (alive(e) && (!boss || (units[e].flags & F_BOSS))) pathD[idx(units[e].x, units[e].y)] = 0;
   bool ch = true;
@@ -106,11 +106,14 @@ void pickDest() {
   }
   if ((units[sel].flags & F_LORD) && objType == OBJ_SEIZE && !anyAlive(true, F_BOSS)) {   // march on the objective
     int foes = 0; for (uint8_t e = NUM_HEROES; e < nUnits; e++) if (alive(e) && units[e].name >= NUM_HEROES && !(units[e].flags & F_RESERVE)) foes++;
-    if (foes <= 2) {
+    if (foes <= 2 || turn > 12) {                       // (respawning chapters: push on after a while)
       if (reachable(idx(objX, objY)) && canStand(objX, objY, sel)) { destX = objX; destY = objY; destFor = sel; }
       else closestTo(objX, objY);
       return;
     }
+  }
+  if (objType == OBJ_SEIZE && turn > 20 && !(units[sel].flags & F_LORD)) {   // a long seize chapter: everyone heads for it
+    closestTo(objX, objY); return;                                             // (so the army can't jam a corridor)
   }
   uint8_t lo, hi; rangeOf(sel, lo, hi);
   int army = 0; for (uint8_t h = 0; h < NUM_HEROES; h++) army += fighter(h) && units[h].cls != C_CLERIC;
@@ -221,7 +224,8 @@ uint8_t botInput() {
     case ST_TARGET: case ST_FORECAST: return A_BUTTON;
     case ST_DANGER: return B_BUTTON;
     case ST_EXP: case ST_LEVELUP: return (wantShots && xT < 75) ? 0 : A_BUTTON;
-    case ST_END: return A_BUTTON;
+    case ST_END: case ST_EPILOGUE: return A_BUTTON;
+    case ST_STATUS: return B_BUTTON;
     default: return 0;
   }
 }
@@ -282,7 +286,7 @@ static int passes, fails;
 #define CHECK(c, msg) do { if (c) passes++; else { printf("FAIL line %d: %s\n", __LINE__, msg); fails++; } } while (0)
 void pump(int n, uint8_t in = 0) {                   // with input: a release frame first, then press / release
   if (in) { ab.nextInput = 0; loop(); }
-  for (int i = 0; i < n; i++) { ab.nextInput = (in && !(i & 1)) ? in : 0; loop(); ArduboyTones::tick(); }
+  for (int i = 0; i < n; i++) { ab.nextInput = (in && !(i & 1)) ? in : 0; loop(); sndTick(); }
 }
 bool pumpUntil(State st, uint8_t in, int max = 3000) { for (int i = 0; i < max && state != st; i++) pump(1, (i & 1) ? 0 : in); return state == st; }
 void enter(uint8_t ch) {
@@ -335,9 +339,11 @@ int runTests() {
   enter(0); storyFlags = 0;
   enter(0); storyFlags = 0; std::string a1 = speakers();
   enter(0); setFlag(2); units[4].flags |= F_JOINED; std::string a2 = speakers();
-  CHECK(a1 == "023", "no flag, no Maren: Brannock, Hale, Wren speak");
-  CHECK(a2 == "014", "flag 2 and Maren: Brannock, Idra, Maren speak");
-  if (a1 != "023" || a2 != "014") printf("  got '%s' and '%s'\n", a1.c_str(), a2.c_str());
+  enter(0); setFlag(2); units[2].flags |= F_JOINED | F_FALLEN; std::string a3 = speakers();
+  CHECK(a1 == "0235", "no flag, no Maren: Brannock, Hale, Wren speak (and Oren: Hale didn't fall)");
+  CHECK(a2 == "01465", "flag 2 and Maren: Brannock, Idra, Maren, and Cass on [2][MAREN]");
+  CHECK(a3 == "0137", "flag 2, no Maren, Hale fallen: [2][MAREN] skipped, [FELL:HALE] speaks");
+  if (a1 != "0235" || a2 != "01465" || a3 != "0137") printf("  got '%s' '%s' '%s'\n", a1.c_str(), a2.c_str(), a3.c_str());
 
   // ---- talk-to-recruit (test chapter 2)
   enter(1);
@@ -427,16 +433,18 @@ int runTests() {
   enter(0); saveGame(); state = ST_SELECT; sel = NONE;
   curX = 10; curY = 10; clampCam(); units[1].lv = 9;              // a change the restart must undo
   pump(2, A_BUTTON);
-  CHECK(state == ST_MENU && menuN == 4 && menuOpt[2] == OPT_RESTART && menuOpt[3] == OPT_QUIT, "empty tile: END TURN, SOUND, RESTART, QUIT");
-  menuSel = 2; pump(2, A_BUTTON);
-  CHECK(state == ST_MENU && confirmRow == 2, "RESTART first asks SURE?");
+  CHECK(state == ST_MENU && menuN == 5 && menuOpt[1] == OPT_ARMY && menuOpt[3] == OPT_RESTART && menuOpt[4] == OPT_QUIT,
+        "empty tile: END TURN, ARMY, SOUND, RESTART, QUIT");
+  menuSel = 3; pump(2, A_BUTTON);
+  CHECK(state == ST_MENU && confirmRow == 3, "RESTART first asks SURE?");
   pump(1); savePBM("t_menu_sure");
   pump(2, DOWN_BUTTON);
   CHECK(confirmRow == NONE, "moving off it cancels");
-  menuSel = 2; pump(2, A_BUTTON); pump(2, A_BUTTON);
+  menuSel = 3; pump(2, A_BUTTON); pump(2, A_BUTTON);
   CHECK(state == ST_CHAPTER && units[1].lv == 1, "RESTART twice: the chapter starts over from its save");
+  musicStop();
   enter(0); saveGame(); state = ST_SELECT; sel = NONE; curX = 10; curY = 10; clampCam();
-  pump(2, A_BUTTON); menuSel = 3; pump(2, A_BUTTON); pump(2, A_BUTTON);
+  pump(2, A_BUTTON); menuSel = 4; pump(2, A_BUTTON); pump(2, A_BUTTON);
   CHECK(state == ST_TITLE, "QUIT twice: back to the title");
   // ---- weapons never wear out; vulneraries do
   enter(0);
@@ -472,11 +480,11 @@ int runTests() {
     CHECK(f.dmg == 8 + 5 + 1 - 10, "...a sword counts all of it (+1: sword beats his axe)");
     units[m].cls = C_MAGE; units[m].item[0] = fire; units[m].x = 13; units[m].name = 7;   // drawn as Aelis
     startBattle(m, e, ST_SELECT); bool dashed = false, spellHeard = false;
-    for (int i = 0; i < 400 && state == ST_BATTLE; i++) { if (advance(m)) dashed = true; if (casts(bStriker) && bStriker == m && timer > IMPACT) spellHeard = true;
+    for (int i = 0; i < 400 && state == ST_BATTLE; i++) { if (advance(m)) dashed = true; if (bStriker == m && casts(bStriker) && timer > IMPACT) spellHeard = true;
       if (bStriker == m && timer == IMPACT + 6) savePBM("t_spell_flight"); if (bStriker == m && timer == IMPACT - 6) savePBM("t_spell_burst");
       ab.nextInput = 0; loop(); }
     CHECK(!dashed && spellHeard, "a caster at range 1 stays put and casts");
-    CHECK(ArduboyTones::heard().count(S_SPELL), "...with the spell sound");
+    CHECK(sndHeard().count(S_SPELL), "...with the spell sound");
     // a sage: attacks with the tome, heals with the staff, whatever order they're carried in
     enter(0);
     units[1].cls = C_SAGE; memset(units[1].item, 0, ITEM_SLOTS); memset(units[1].uses, 0, ITEM_SLOTS);
@@ -565,6 +573,7 @@ int runTests() {
     CHECK(units[0].item[0] != silver && bBroke == 0 && !fA.can, "...the last use breaks it, and its wielder stops striking");
     pump(1); state = ST_BATTLE; timer = 20; bStriker = NONE; drawBattle(); FX::display(true); savePBM("t_broke");
     units[0].item[0] = iron; units[0].uses[0] = 1; bBroke = NONE; forecast(0, e, fA);
+    bA = 0; bD = e; bStriker = 0;
     for (int i = 0; i < 30; i++) applyStrike();
     CHECK(units[0].item[0] == iron, "an iron sword never breaks"); }
 
@@ -659,11 +668,130 @@ int runTests() {
     bool fresh = true; for (uint8_t h = 9; h < NUM_HEROES; h++) if (units[h].name != h || joined(h)) fresh = false;
     CHECK(fresh && units[1].lv == 7, "a save from before the new heroes: they're added, the army kept"); }
 
+  // ---- the status card: from a hero who has acted, an enemy's danger zone, ARMY, the roster
+  enter(0);
+  { units[1].flags |= F_MOVED; centerOn(units[1].x, units[1].y); state = ST_SELECT; pump(2, A_BUTTON);
+    CHECK(state == ST_STATUS && stU == 1 && !stDeploy, "A on a hero who has acted: their card");
+    pump(1); savePBM("t_status_hero");
+    pump(2, RIGHT_BUTTON);
+    CHECK(state == ST_STATUS && stU != 1 && stU < NUM_HEROES && alive(stU), "RIGHT: the next hero on the field");
+    uint8_t seen = 0; for (int i = 0; i < 20; i++) { pump(2, RIGHT_BUTTON); if (isEnemy(stU) || !alive(stU)) seen++; }
+    CHECK(!seen, "...never an enemy, never someone off the field");
+    uint8_t last = stU; pump(2, B_BUTTON);
+    CHECK(state == ST_SELECT && curX == units[last].x && curY == units[last].y, "B: back to the map, cursor on them");
+    uint8_t e = NUM_HEROES; units[e].flags &= ~F_RESERVE;
+    centerOn(units[e].x, units[e].y); state = ST_SELECT; pump(2, A_BUTTON);
+    CHECK(state == ST_DANGER, "A on an enemy: its danger zone");
+    pump(2, A_BUTTON);
+    CHECK(state == ST_STATUS && stU == e, "A again: the enemy's card");
+    pump(1); savePBM("t_status_enemy");
+    for (int i = 0; i < 6; i++) { pump(2, LEFT_BUTTON); if (!isEnemy(stU) || !alive(stU)) seen++; }
+    CHECK(!seen, "...LEFT/RIGHT stay with the living enemies");
+    pump(2, A_BUTTON); centerOn(10, 10); state = ST_SELECT; pump(2, A_BUTTON);
+    menuSel = menuIndexOf(OPT_ARMY); pump(2, A_BUTTON);
+    CHECK(state == ST_STATUS && stU == 0, "game menu ARMY: the lord's card first");
+    pump(2, B_BUTTON);
+    state = ST_DEPLOY; menuSel = 1; pump(2, RIGHT_BUTTON);
+    CHECK(state == ST_STATUS && stDeploy && stU == rosterAt(1), "deployment: RIGHT shows the hero's card");
+    for (int i = 0; i < 20; i++) { pump(2, RIGHT_BUTTON); if (!available(stU)) seen++; }
+    CHECK(!seen, "...and steps through the roster only");
+    pump(2, B_BUTTON);
+    CHECK(state == ST_DEPLOY, "B: back to the deployment list"); }
+
+  // ---- the save is mirrored to the game's own FX block; EEPROM wiped by another game comes back
+  enter(0);
+  { units[1].lv = 11; storyFlags = 0x0105; gold = 1234; saveGame();
+    CHECK(FX::save()[0] == SAVE_MAGIC && FX::save()[SAVE_LEN - 1] == eeprom_read_byte((const uint8_t*)(SAVE_AT + SAVE_LEN - 1)), "saving writes the FX copy");
+    memset(simEeprom() + 16, 0x5A, 1000);                       // someone else's game
+    restoreSave();
+    CHECK(hasSave() && loadSave() == 0 && units[1].lv == 11 && storyFlags == 0x0105 && gold == 1234, "power-on: the FX copy puts the save back");
+    FX::eraseSaveBlock(0); memset(simEeprom() + SAVE_AT, 0, SAVE_LEN); saveGame(); uint8_t keep = eeprom_read_byte((const uint8_t*)(SAVE_AT + 9));
+    FX::eraseSaveBlock(0); restoreSave();
+    CHECK(hasSave() && eeprom_read_byte((const uint8_t*)(SAVE_AT + 9)) == keep, "...a blank FX block leaves EEPROM alone (emulators without FX saves)"); }
+
+  // ---- the record: turns add up on ONWARD only; side chapters and the fallen count
+  enter(0);
+  { eeprom_update_word((uint16_t*)TALLY, 0xFFFF);
+    CHECK(tally() == 0, "a blank tally (an old save) reads 0");
+    newGame(); CHECK(tally() == 0, "a new game starts the tally at 0");
+    turn = 7; won = true; titleSel = 0; state = ST_END; objType = OBJ_ROUT; pump(2, A_BUTTON);
+    CHECK(tally() == 7 && chapter == 1, "ONWARD adds the chapter's turns");
+    startChapter(loadSave()); CHECK(tally() == 7, "...a restart doesn't");
+    storyFlags = SIDE_FLAGS & (SIDE_FLAGS - 1);                  // all but the lowest side chapter's flag
+    units[2].flags |= F_JOINED | F_FALLEN; units[2].exp = 0;
+    turn = 3; objType = OBJ_ROUT; state = ST_EPILOGUE; pump(1); savePBM("t_record");
+    CHECK(rankOf(0, 9999) == 4 && rankOf(80, 0) == 0, "rank: D at the bottom, S at the top"); }
+
   printf("scenario tests: %d passed, %d failed\n", passes, fails);
   return fails ? 1 : 0;
 }
+// ENDINGS=1 ./sim : print the last chapter's win scene for a set of story flags and survivors
+void dumpScene(const char* title, uint16_t flags, const char* fallen, const char* never) {
+  memset(simEeprom(), 0xFF, 1024); setup(); loadHeroes();
+  for (uint8_t h = 0; h < NUM_HEROES; h++) units[h].flags |= F_JOINED;
+  auto mark = [](const char* list, uint8_t f) {
+    for (uint8_t h = 1; h < NUM_HEROES; h++) if (strstr(list, (std::string(",") + str(STR_NAME + h) + ",").c_str())) {
+      if (f) units[h].flags |= f; else units[h].flags &= ~F_JOINED; } };
+  mark(fallen, F_FALLEN); mark(never, 0);
+  storyFlags = flags; loadChapter(NUM_CHAPTERS - 1);
+  printf("\n===== %s (flags 0x%04x)\n", title, flags);
+  startTalk(SC_WIN, ST_END);
+  while (state == ST_TALK) {
+    std::string t; for (uint8_t i = 0; i < talkLen; i++) { char c = FX::readIndexedUInt8(talkAddr + 3, i); t += c == '\n' ? ' ' : c; }
+    printf("  %-8s %s\n", str(STR_NAME + talkWho), t.c_str());
+    talkAddr += 3 + talkLen; talkLeft--; if (!loadLine()) break;
+  }
+}
 int main(int argc, char** argv) {
   if (getenv("TESTS")) return runTests();
+  if (getenv("UISHOTS")) {                              // UISHOTS=1 ./sim : the item list and deployment count, real data
+    wantShots = true; memset(simEeprom(), 0xFF, 1024); setup(); loadHeroes();
+    for (uint8_t h = 0; h < 5; h++) units[h].flags |= F_JOINED;
+    uint8_t c = 0; while (c < NUM_CHAPTERS && FX::readIndexedUInt8(chapterAddr(c), 5) < 6) c++;   // first chapter deploying 6+
+    loadChapter(c); state = ST_DEPLOY; menuSel = 0; pump(2); savePBM("u_deploy");
+    printf("chapter %d deploys %d; army %d; shown %d/%d\n", c, deployMax, rosterCount(), deployedCount(), rosterCount() < deployMax ? rosterCount() : deployMax);
+    placeArmy(); state = ST_SELECT;
+    Unit& I = units[1]; memset(I.item, 0, ITEM_SLOTS); memset(I.uses, 0, ITEM_SLOTS);
+    giveItem(1, itemId("JAVELIN"), 1); giveItem(1, itemId("SILVER LANCE"), 17); giveItem(1, itemId("VULNERARY"), 3); giveItem(1, itemId("HAWK FEATHER"), 1);
+    I.item[0] = itemId("SILVER LANCE"); I.uses[0] = 17; I.item[1] = itemId("JAVELIN"); I.uses[1] = 1;
+    sel = 1; centerOn(units[1].x, units[1].y); state = ST_ITEMS; menuSel = 1; pump(1); savePBM("u_items");
+    centerOn(18, 8); sel = 1; units[1].x = 18; units[1].y = 8; state = ST_ITEMS; menuSel = 0; pump(1); savePBM("u_items_left");
+    return 0;
+  }
+  if (getenv("SHOWCASE")) {                             // SHOWCASE=1 ./sim : README screenshots of the v1.0 content
+    wantShots = true;
+    auto fresh = [](uint8_t ch, uint16_t flags) {
+      memset(simEeprom(), 0xFF, 1024); setup(); loadHeroes(); storyFlags = flags;
+      for (uint8_t h = 0; h < NUM_HEROES; h++) { units[h].flags |= F_JOINED; while (units[h].lv < 12) rollLevelUp(units[h]); }
+      loadChapter(ch); placeArmy(); state = ST_SELECT; };
+    auto talkTo = [](uint8_t scene, const char* who, int skip) {   // a scene's first line by `who` (after `skip` of them)
+      startTalk(scene, ST_SELECT);
+      while (state == ST_TALK) {
+        if (!strcmp(str(STR_NAME + talkWho), who) && !skip--) { talkShown = talkLen; ab.nextInput = 0; drawTalk(); FX::display(true); return; }
+        talkAddr += 3 + talkLen; talkLeft--; if (!loadLine()) break; } };
+    fresh(NUM_CHAPTERS - 5, 0x3FFF); centerOn(6, 7); curX = 6; curY = 7; pump(2); savePBM("s22_swamp");
+    fresh(NUM_CHAPTERS - 4, 0x3FFF); talkTo(SC_OPEN, "ODA", 2); savePBM("s23_oda");
+    fresh(NUM_CHAPTERS - 4, 0x3FFF); centerOn(11, 7); pump(2); savePBM("s24_foundry");
+    fresh(NUM_CHAPTERS - 1, 0x3FFF);
+    { uint8_t n = NUM_HEROES; units[0].x = 11; units[0].y = 1; units[NUM_HEROES + 1].flags = 0; centerOn(11, 1);
+      startBattle(0, n, ST_SELECT); while (state == ST_TALK) { talkAddr += 3 + talkLen; talkLeft--; if (!loadLine()) finishTalk(); }
+      for (int i = 0; i < 200 && state == ST_BATTLE; i++) { if (bStriker == n && timer == IMPACT - 3) { savePBM("s25_nhal"); break; } ab.nextInput = 0; loop(); } }
+    fresh(NUM_CHAPTERS - 1, 0x3FFF); talkTo(SC_WIN, "OLD TAM", 0); savePBM("s27_ending");
+    fresh(NUM_CHAPTERS - 1, 0x3FFF); talkTo(SC_WIN, "ROOK", 0); savePBM("s28_coda");
+    fresh(NUM_CHAPTERS - 2, 0x3FFF); stU = 9; stDeploy = false; units[9].flags |= F_ALIVE; units[9].exp = 64; drawStatus(); FX::display(true); savePBM("s26_status");
+    fresh(NUM_CHAPTERS - 1, 0x3FFF); units[3].flags |= F_FALLEN; eeprom_update_word((uint16_t*)TALLY, 231); turn = 9; objType = OBJ_SEIZE;
+    drawEpilogue(); FX::display(true); savePBM("s29_record");
+    return 0;
+  }
+  if (getenv("ENDINGS")) {
+    const uint16_t ALL = 0x3FFF;
+    dumpScene("great bell, calling known, everyone alive", ALL, "", "");
+    dumpScene("great bell, no 17X; Hale and Wren fell", ALL & ~(1 << 12), ",HALE,WREN,", ",LIR,");
+    dumpScene("no bell: Maren rings from the doorway", ALL & ~(1 << 13) & ~(1 << 6), ",ROOK,", ",ODA,");
+    dumpScene("no bell, Maren fell: Thane", ALL & ~(1 << 13) & ~(1 << 6), ",MAREN,", ",ODA,");
+    dumpScene("no bell, Maren and Thane gone: Brannock", 0x0FFF & ~(1 << 6), ",MAREN,IDRA,", ",THANE,ODA,LIR,");
+    return 0;
+  }
   int games = argc > 1 ? atoi(argv[1]) : 200;
   Stats S;
   for (int g = 0; g < games; g++) {
@@ -692,7 +820,7 @@ int main(int argc, char** argv) {
       int n = atoi(getenv("START"));
       for (uint8_t h = 0; h < NUM_HEROES; h++) {
         Unit& U = units[h];
-        static const uint8_t joinsAfter[NUM_HEROES] = { 0, 0, 0, 0, 0, 0, 0, 11, 14, 18, 18, 20, 22 };   // Aelis Ch 9, Rook Ch 11, Saoirse/Thane Ch 14, Hesk Ch 16, Lir 17X
+        static const uint8_t joinsAfter[NUM_HEROES] = { 0, 0, 0, 0, 0, 0, 0, 11, 14, 18, 18, 20, 22, 25 };   // Aelis Ch 9, Rook Ch 11, Saoirse/Thane Ch 14, Hesk Ch 16, Lir 17X, Oda 19X
         if (n > joinsAfter[h]) U.flags |= F_JOINED;
         while (U.lv < L) rollLevelUp(U);
         static const char* up[] = { "SILVER SWORD", "STEEL LANCE", "STEEL AXE", "STEEL BOW", "STEEL LANCE", "HEAL", "", "STEEL LANCE", "SILVER SWORD", "THUNDER" };
@@ -711,7 +839,7 @@ int main(int argc, char** argv) {
       ab.nextInput = release ? 0 : botInput();
       release = !release;
       State before = state;
-      loop(); frames++; ArduboyTones::tick();
+      loop(); frames++; sndTick();
       if (onlyCh >= 0 && chapter != onlyCh) break;
       if (careful && resets < 10 && state != ST_END && state != ST_CHAPTER) {   // a hero fell: power-cycle, CONTINUE
         bool fell = false;
@@ -898,12 +1026,12 @@ int main(int argc, char** argv) {
   printf("alarms rung %ld  enemies appearing mid-chapter %ld (demons %ld)  ledgers found %ld\n", S.alarms, S.ambushes, S.demons, S.ledgers);
   printf("chapter 2 with the full army: %ld attempts, %ld cleared, %ld rescued Maren\n", S.fullCh2, S.fullCh2Clear, S.fullCh2Rescue);
   printf("sounds never heard:");
-  struct { const uint16_t* s; const char* n; } SND[] = {
+  struct { const uint8_t* s; const char* n; } SND[] = {
     {S_CURSOR,"cursor"},{S_MENU,"menu"},{S_CONFIRM,"confirm"},{S_CANCEL,"cancel"},{S_STEP,"step"},{S_EXP,"exp"},
     {S_LVLUP,"lvlup"},{S_DING,"ding"},{S_PHASE_P,"phase_p"},{S_PHASE_E,"phase_e"},{S_SWING,"swing"},{S_ARROW,"arrow"},
     {S_SPELL,"spell"},{S_HIT,"hit"},{S_CRIT,"crit"},{S_MISS,"miss"},{S_FALL,"fall"},{S_M_CHAPTER,"m_chapter"},{S_M_BOSS,"m_boss"},
     {S_M_WIN,"m_win"},{S_M_LOSE,"m_lose"},{S_ALARM,"alarm"},{S_M_DEMON,"m_demon"},{S_SEAL,"seal"} };
-  for (auto& e : SND) if (!ArduboyTones::heard().count(e.s)) printf(" %s", e.n);
+  for (auto& e : SND) if (!sndHeard().count(e.s)) printf(" %s", e.n);
   printf("\n");
   return S.stuck ? 1 : 0;
 }

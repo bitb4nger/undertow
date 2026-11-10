@@ -161,7 +161,52 @@ def horned(pose):
     return c
 
 
-DEMONS = {'drowned': drowned, 'bellwraith': bellwraith, 'horned': horned}
+def nhal(pose):
+    """What pulls at the world from under the cathedral: no legs, just a whirl of water that
+    rises into a body -- a crown of horns, three eyes, long arms that reach and drag."""
+    c = C(W, H)
+    s = pose == 'strike'
+    cx, top = 26 + (2 if s else 0), GROUND - 31          # top: the crown of the head
+    # the undertow: three broken rings turning round its base
+    for k, r in enumerate((7, 12, 17)):
+        ry = r * 0.25
+        for a in range(0, 360, 2):
+            if (a + k * 70 + (40 if s else 0)) % 120 < 45: continue
+            t = math.radians(a)
+            x, y = round(cx + r * math.cos(t)), round(GROUND - 2 + ry * math.sin(t))
+            if 0 <= x < W and 0 <= y < H: c.px(x, y)
+    # the body: a column twisting up out of the water into broad shoulders
+    body = poly([(cx - 3, GROUND - 3), (cx + 4, GROUND - 3), (cx + 7, top + 16), (cx + 12, top + 9),
+                 (cx + 6, top + 5), (cx - 6, top + 5), (cx - 11, top + 10), (cx - 6, top + 17)])
+    grain(c, body, rings=3)
+    head = ellipse(cx + 1, top + 4, 5, 4.5)
+    grain(c, head, spacing=2, rings=1)
+    # the crown: five horns fanned over the head, the middle one tallest
+    crown = set()
+    for k, (dx, h) in enumerate(((-5, 5), (-3, 8), (1, 10), (4, 8), (7, 5))):
+        bx, by = cx + dx, top + 1
+        crown |= thick(bx, by, bx + dx // 3, by - h, 1.2)
+    crown = {(x, y) for (x, y) in crown if y >= 0}
+    halo(c, crown, 1); fill(c, crown)
+    eyes(c, [(cx - 2, top + 3), (cx + 3, top + 3), (cx + 1, top + 6)], 0)
+    # arms: one reaches forward (down and dragging when it strikes), the far one trails behind
+    sh = (cx + 9, top + 10)
+    if s: el, hand = (sh[0] + 9, sh[1] + 5), (sh[0] + 18, sh[1] + 13)
+    else: el, hand = (sh[0] + 6, sh[1] - 2), (sh[0] + 13, sh[1] + 3)
+    arm = thick(*sh, *el, 2.2) | thick(*el, *hand, 1.7)
+    grain(c, arm)
+    for k in (-4, -1, 2, 5):
+        a = (7, 5) if s else (5, 3)
+        c.line(hand[0], hand[1] + k // 2, hand[0] + a[0], hand[1] + a[1] + k, 1)
+    far = thick(cx - 9, top + 11, cx - 16, top + 18, 2) | thick(cx - 16, top + 18, cx - 17, top + 26, 1.5)
+    grain(c, far)
+    if s:   # the pull: dashed streaks dragged toward it
+        for k in range(4):
+            c.line(hand[0] + 12, hand[1] - 9 + k * 5, hand[0] + 2, hand[1] - 5 + k * 4, 1, dash=lambda i: i % 3 != 2)
+    return c
+
+
+DEMONS = {'drowned': drowned, 'bellwraith': bellwraith, 'horned': horned, 'nhal': nhal}
 
 
 def all_frames():

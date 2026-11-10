@@ -60,6 +60,7 @@ NAMES = [
     ('THANE',     26,      0,    28),     # the cliff village's monk, locked in his chapel (Ch 14)
     ('HESK',      27,      0,    29),     # walks the salt flats killing anything that moves (Ch 16); 29 + mirror 30
     ('LIR',       28,      3,    31),     # Old Tam's grandson, taken in the raids: one of the Drowned (17X)
+    ('ODA',       32,      0,    32),     # the last bellwright, a hermit by the old foundry in the marsh (19X)
     ('RAIDER',    None,    1,    4),
     ('BOWMAN',    None,    1,    5),
     ('SPEAR',     None,    1,    6),
@@ -101,8 +102,9 @@ NAMES = [
     ('STILL ONE', 28,      3,    9),      # a Drowned who stands apart (Ch 17): Lir, though no one knows it yet
     ('GATEKEEPER', 31,     3,    22),     # what guards the first gate (Ch 17)
     ('VILLAGER',  None,    0,    4),      # the cliff village (Ch 14)
+    ('NHAL',      33,      3,    33),     # what pulls at the world from under the drowned cathedral (Ch 22)
 ]
-NUM_HEROES = 13
+NUM_HEROES = 14
 
 # ------------------------------------------------------------- items
 # kind: SWORD LANCE AXE BOW CLAW (weapons), STAFF, HEAL (might = HP restored), PROMO (class change).
@@ -146,6 +148,8 @@ ITEMS = [
     ('IRON BARK',    'BOOST',  2,   4,  0, 0, 0,  1),
     ('HEART ROOT',   'BOOST',  5,   0,  0, 0, 0,  1),
     ('WINGED BOOTS', 'BOOST',  1,   5,  0, 0, 0,  1),   # +1 MOV: the only pair
+    # new items go at the end: a save stores item ids, so the order above must never change
+    ('UNDERTOW',     'TOME',  10,  85,  5, 1, 2,  1),   # Nhal's: the pull itself (never sold, never dropped)
 ]
 # shop prices in gold (multiples of 10, at most 2550). Only priced items can be put on sale.
 PRICES = {'VULNERARY': 300, 'IRON SWORD': 460, 'IRON LANCE': 560, 'IRON AXE': 420, 'IRON BOW': 540,
@@ -194,6 +198,9 @@ HEROES = {
     'LIR':      dict(cls='HORROR', lv=12, hp=32, str=12, skl=7, spd=9, df=8, joined=False,
                      items=['CLAWS', 'VULNERARY'], growth=(70, 45, 35, 40, 35),
                      death=[('LIR', "TELL GRANDDAD.../I WASN'T AFRAID./NOT AT THE END.")]),
+    'ODA':      dict(cls='FIGHTER', lv=15, hp=38, str=14, skl=10, spd=6, df=10, joined=False,
+                     items=['STEEL AXE', 'HAND AXE', 'VULNERARY'], growth=(70, 50, 40, 20, 35),
+                     death=[('ODA', "THE BRONZE.../DON'T LET IT/COOL WRONG. THE/BELL MUST RING/TRUE.")]),
     'AELIS':    dict(cls='MAGE', lv=6, hp=19, str=8, skl=7, spd=8, df=3, joined=False,
                      items=['FIRE', 'VULNERARY'],        growth=(50, 55, 45, 50, 20),
                      death=[('AELIS', "FATHER... I'M/SORRY. I READ/TOO SLOWLY...")]),

@@ -44,7 +44,7 @@ slots:
 
 enemies:
 # name      class     x  y  lv hp str skl spd def flags        items
-VEY         WARDEN   12  1 15  40 12   9   6  11   boss hold    SILVER LANCE, STEEL AXE, ELIXIR*
+VEY         WARDEN   12  1 15  40 12   9   6  11   boss hold    SILVER LANCE*, STEEL AXE, ELIXIR
 ZEALOT      LANCER    9 11 13  29 10   9   8   7   reserve1     STEEL LANCE
 ZEALOT      KNIGHT    5  9 13  33 10   6   4  11   reserve1     STEEL LANCE
 WATCHMAN    ARCHER   13 10 13  26  9  10   8   4   reserve2     STEEL BOW
@@ -80,8 +80,8 @@ scene boss:
 VEY: THE ISLAND PAYS./IT HAS ALWAYS/PAID. NO OUTSIDER/CHANGES THAT.
 
 village 2 5:
-BRANNOCK: A COOPER'S YARD./THE OLD MAN/SALUTES WITH A/HAMMER AND HANDS/US HIS SAVINGS.
-gold: 1200
+BRANNOCK: A COOPER'S YARD./THE OLD MAN HANDS/US A SILVER AXE./HE SWEARS HE/NEVER STOLE IT.
+gift: SILVER AXE
 
 village 20 10:
 BRANNOCK: A HEALER'S SHOP,/SHUTTERED. SHE/OPENS IT FOR US.

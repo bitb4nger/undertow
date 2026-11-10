@@ -16,7 +16,6 @@
 
 #include <Arduboy2.h>
 #include <ArduboyFX.h>
-#include <ArduboyTones.h>
 #include <avr/eeprom.h>
 #include "fxdata/fxdata.h"
 #include "story.h"
@@ -32,15 +31,59 @@ ARDUBOY_NO_USB
 #endif
 
 Arduboy2Base ab;                  // Base: no built-in text/font/logo -- we draw our own
-ArduboyTones sound(ab.audio.enabled);
 
 const uint8_t NONE = 255;
 
-// One square-wave voice: music motifs own it while they play; effects wait.
+// ================================================================= sound
+// One square-wave voice on the speaker pin, the way ArduboyTones drives it (Timer3 in CTC mode at
+// /8, the pin toggled from the compare interrupt), but reading sfx.h's byte pairs: (pitch, length).
+// Pitch 0 is a rest, else 27.5 Hz * 2^(pitch/24); length is in 1/256 s; (0,0) ends, (1,0) loops.
+// With sound off the pins are inputs (Arduboy2Audio), so the toggling is silent.
+#ifdef __AVR__
+// per quarter tone k of the lowest octave (27.5-55 Hz): the frequency x 16, and half a period
+// in 0.5 us ticks (Timer3 at /8). An octave up doubles one and halves the other.
+const uint16_t PITCH_F[24] PROGMEM = { 440, 453, 466, 480, 494, 508, 523, 539, 554, 571, 587, 605, 622, 640, 659, 679, 698, 719, 740, 762, 784, 807, 831, 855 };
+const uint16_t PITCH_T[24] PROGMEM = { 36364, 35328, 34323, 33346, 32396, 31474, 30578, 29708, 28862, 28040, 27242, 26466, 25713, 24981, 24270, 23579, 22908, 22256, 21622, 21006, 20408, 19827, 19263, 18715 };
+const uint8_t* sndAt; const uint8_t* sndStart;
+volatile uint16_t sndLeft;                         // pin toggles left in this note
+volatile bool sndOn;
+bool sndSilent;
+void sndStop() { TIMSK3 = 0; TCCR3B = 0; bitClear(SPEAKER_1_PORT, SPEAKER_1_BIT); sndOn = false; }
+void sndNext() {
+  uint8_t p, d;
+  for (;;) {
+    p = pgm_read_byte(sndAt); d = pgm_read_byte(sndAt + 1); sndAt += 2;
+    if (d) break;
+    if (!p) { sndStop(); return; }
+    sndAt = sndStart;                               // (1, 0): from the top
+  }
+  uint16_t f = 1000 * 16, t = 1000;                 // a rest ticks at 1 kHz with the pin low
+  sndSilent = !p;
+  if (p) { uint8_t o = 0; while (p >= 24) { p -= 24; o++; } f = pgm_read_word(&PITCH_F[p]) << o; t = pgm_read_word(&PITCH_T[p]) >> o; }
+  else bitClear(SPEAKER_1_PORT, SPEAKER_1_BIT);
+  OCR3A = t - 1;
+  sndLeft = ((uint32_t)f * d >> 11) | 1;            // 2 toggles a cycle for d/256 s
+}
+ISR(TIMER3_COMPA_vect) {
+  if (!sndSilent) SPEAKER_1_PORT ^= _BV(SPEAKER_1_BIT);
+  if (!--sndLeft) sndNext();
+}
+void sndPlay(const uint8_t* s) {
+  TIMSK3 = 0;
+  sndStart = sndAt = s; sndOn = true;
+  TCCR3A = 0; TCCR3B = _BV(WGM32) | _BV(CS31); TCNT3 = 0;
+  sndNext();
+  if (sndOn) TIMSK3 = _BV(OCIE3A);
+}
+#else
+#include "SimTones.h"                              // tools/sim: the harness's stand-in
+#endif
+
+// Music motifs own the voice while they play; effects wait.
 bool musicOn;
-void sfx(const uint16_t* s) { if (!musicOn) sound.tones(s); }
-void music(const uint16_t* s) { musicOn = true; sound.tones(s); }
-void musicStop() { if (musicOn) { sound.noTone(); musicOn = false; } }
+void sfx(const uint8_t* s) { if (!musicOn) sndPlay(s); }
+void music(const uint8_t* s) { musicOn = true; sndPlay(s); }
+void musicStop() { if (musicOn) { sndStop(); musicOn = false; } }
 
 // =================================================================== map
 const uint8_t MAP_W = 24, MAP_H = 16;
@@ -58,12 +101,12 @@ const uint8_t T_BACK[]  PROGMEM = { 0,   1,   2,  3,       4,       4,   3,   5,
 
 // the current chapter's terrain, two tiles per byte (loaded from FX)
 uint8_t mapT[MAP_N / 2];
-inline uint16_t idx(uint8_t x, uint8_t y) { return y * MAP_W + x; }
+__attribute__((noinline)) uint16_t idx(uint8_t x, uint8_t y) { return y * MAP_W + x; }
 uint8_t terrainAt(uint8_t x, uint8_t y) {
   uint8_t b = mapT[idx(x, y) >> 1];
   return (x & 1) ? (b & 15) : (b >> 4);
 }
-inline uint8_t tCost(uint8_t t)  { return pgm_read_byte(&T_COST[t]); }
+__attribute__((noinline)) uint8_t tCost(uint8_t t)  { return pgm_read_byte(&T_COST[t]); }
 inline uint8_t tAvoid(uint8_t t) { return pgm_read_byte(&T_AVOID[t]); }
 inline uint8_t tDef(uint8_t t)   { return pgm_read_byte(&T_DEF[t]); }
 
@@ -73,7 +116,7 @@ Unit units[MAX_UNITS];            // [0..NUM_HEROES) is the army, the rest this 
 uint8_t nUnits;
 
 inline bool alive(uint8_t u)   { return units[u].flags & F_ALIVE; }
-inline bool isEnemy(uint8_t u) { return units[u].flags & F_ENEMY; }
+__attribute__((noinline)) bool isEnemy(uint8_t u) { return units[u].flags & F_ENEMY; }
 inline bool joined(uint8_t u)  { return units[u].flags & F_JOINED; }
 inline bool fighter(uint8_t u) { return alive(u) && joined(u); }          // a hero on the field
 inline bool available(uint8_t u) { return joined(u) && !(units[u].flags & F_FALLEN); }   // in the army
@@ -82,11 +125,11 @@ uint8_t unitAt(uint8_t x, uint8_t y) {
     if (alive(i) && units[i].x == x && units[i].y == y) return i;
   return NONE;
 }
-uint8_t manhattan(uint8_t ax, uint8_t ay, uint8_t bx, uint8_t by) {
+__attribute__((noinline)) uint8_t manhattan(uint8_t ax, uint8_t ay, uint8_t bx, uint8_t by) {
   return (ax > bx ? ax - bx : bx - ax) + (ay > by ? ay - by : by - ay);
 }
 uint8_t dist2(uint8_t a, uint8_t b) { return manhattan(units[a].x, units[a].y, units[b].x, units[b].y); }
-bool canWield(uint8_t u, uint8_t kind) {                 // a class wields up to two weapon kinds
+__attribute__((noinline)) bool canWield(uint8_t u, uint8_t kind) {                 // a class wields up to two weapon kinds
   const uint8_t* c = CLASS_ARMS[units[u].cls];
   return kind == pgm_read_byte(&c[0]) || kind == pgm_read_byte(&c[1]);
 }
@@ -98,7 +141,7 @@ uint8_t clsField(uint8_t cls, uint8_t field) { return FX::readIndexedUInt8(FX_GF
 
 // ================================================================= items
 ItemDef idef(uint8_t id) { ItemDef d; FX::readDataBytes(FX_GFX::tables + TB_ITEMS + id * sizeof d, (uint8_t*)&d, sizeof d); return d; }
-uint8_t kindOf(uint8_t id) { return pgm_read_byte(&ITEM_KIND[id]) & 15; }
+__attribute__((noinline)) uint8_t kindOf(uint8_t id) { return pgm_read_byte(&ITEM_KIND[id]) & 15; }
 
 // the first weapon (staff = false) or staff this unit's class can wield, or NONE
 uint8_t findSlot(uint8_t u, bool staff) {
@@ -125,7 +168,7 @@ void removeItem(uint8_t u, uint8_t s) {
   for (; s < ITEM_SLOTS - 1; s++) { U.item[s] = U.item[s + 1]; U.uses[s] = U.uses[s + 1]; }
   U.item[ITEM_SLOTS - 1] = 0; U.uses[ITEM_SLOTS - 1] = 0;
 }
-bool giveItem(uint8_t u, uint8_t id, uint8_t uses) {
+__attribute__((noinline)) bool giveItem(uint8_t u, uint8_t id, uint8_t uses) {
   for (uint8_t s = 0; s < ITEM_SLOTS; s++)
     if (!units[u].item[s]) { units[u].item[s] = id; units[u].uses[s] = uses & 0x7F; return true; }
   return false;
@@ -141,7 +184,7 @@ uint8_t stash(uint8_t finder, uint8_t id, uint8_t uses) {   // the finder, else 
 }
 // Common weapons and staves never wear out. Fine ones (uses > 1 in the item table) do; potions
 // and crests are used up. Anything that runs out shows its count.
-bool consumable(uint8_t id) { return pgm_read_byte(&ITEM_KIND[id]) & K_COUNTED; }   // potions, crests, fine weapons
+__attribute__((noinline)) bool consumable(uint8_t id) { return pgm_read_byte(&ITEM_KIND[id]) & K_COUNTED; }   // potions, crests, fine weapons
 // one use off a fine weapon or staff in slot s; true if it broke (and is gone)
 bool wear(uint8_t u, uint8_t s) {
   uint8_t k = pgm_read_byte(&ITEM_KIND[units[u].item[s]]);
@@ -166,7 +209,7 @@ void rangeOf(uint8_t u, uint8_t& lo, uint8_t& hi) {
 // One 384-byte buffer serves player range, danger zones, routes and the AI.
 uint8_t dist[MAP_N];
 const uint8_t UNREACH = 0x7F;
-inline uint8_t dcost(uint16_t i) { return dist[i] & 0x7F; }
+__attribute__((noinline)) uint8_t dcost(uint16_t i) { return dist[i] & 0x7F; }
 inline bool reachable(uint16_t i) { return dcost(i) != UNREACH; }
 inline bool marked(uint16_t i) { return dist[i] & 0x80; }
 
@@ -263,7 +306,7 @@ bool rollHit(uint8_t hit) { return (uint8_t)((rnd(100) + rnd(100)) / 2) < hit; }
 // ================================================================= state
 enum State : uint8_t { ST_TITLE, ST_CHAPTER, ST_TALK, ST_DEPLOY, ST_BANNER, ST_SELECT, ST_MOVE, ST_WALK, ST_MENU,
                        ST_ITEMS, ST_TARGET, ST_FORECAST, ST_BATTLE, ST_HEALFX, ST_GOT, ST_EXP, ST_LEVELUP,
-                       ST_ENEMY, ST_DANGER, ST_END, ST_TRADE, ST_SHOP };
+                       ST_ENEMY, ST_DANGER, ST_END, ST_TRADE, ST_SHOP, ST_STATUS, ST_EPILOGUE };
 State state;
 uint8_t curX, curY, camX, camY;
 uint8_t sel = NONE, origX, origY;     // unit being commanded
@@ -274,7 +317,7 @@ bool enemyPhase, won;
 uint8_t chapter, objType, objX, objY, objTurns;
 uint8_t deployMax;
 uint16_t deployMask;                             // bit per hero chosen to fight
-inline uint16_t bit16(uint8_t h) { return (uint16_t)1 << h; }
+__attribute__((noinline)) uint16_t bit16(uint8_t h) { return (uint16_t)1 << h; }
 uint8_t capId, capX, capY, capLeaves;            // a captive waiting to be talked to (NONE if none)
 uint8_t nVill, villX[MAX_VILLAGES], villY[MAX_VILLAGES], villDone;   // villages and chests
 uint8_t nEv, evDone;                             // the chapter's events; bit per one-shot event that has fired
@@ -285,7 +328,7 @@ void setFlag(uint8_t n) { n--; if (n < 16) storyFlags |= bit16(n); else localFla
 uint24_t chAddr;
 enum : uint8_t { OBJ_ROUT, OBJ_SEIZE, OBJ_BOSS, OBJ_SURVIVE };
 
-enum : uint8_t { OPT_ATTACK, OPT_SEIZE, OPT_TALK, OPT_VISIT, OPT_HEAL, OPT_ITEM, OPT_WAIT, OPT_END, OPT_SOUND, OPT_RESTART, OPT_QUIT };
+enum : uint8_t { OPT_ATTACK, OPT_SEIZE, OPT_TALK, OPT_VISIT, OPT_HEAL, OPT_ITEM, OPT_WAIT, OPT_END, OPT_SOUND, OPT_RESTART, OPT_QUIT, OPT_ARMY };
 uint8_t confirmRow = NONE;                       // RESTART / QUIT ask "SURE?" first
 uint8_t titleSel;
 uint8_t menuOpt[7], menuN, menuSel;
@@ -355,8 +398,32 @@ const uint8_t SAVE_MAGIC = 0xE4;                 // bump whenever Unit, the rost
 // twice -- as it was when the chapter began, and as it is now -- so a restart puts it back too.
 // The wagon lives only in EEPROM (no RAM): 6 pages of 4 slots, (item, uses) each.
 const uint8_t WAGON = NUM_HEROES, WAGON_PAGES = 6, WAGON_N = WAGON_PAGES * ITEM_SLOTS;   // trade "heroes" WAGON.. are its pages
-const uint16_t WAGON_SAVED = SAVE_AT + 6 + 21 * 15 + 4, WAGON_LIVE = WAGON_SAVED + WAGON_N * 2;   // room for 15 heroes
+const uint16_t TALLY = SAVE_AT + 6 + 21 * 15;     // turns taken by the chapters behind us (the record)
+const uint16_t WAGON_SAVED = TALLY + 4, WAGON_LIVE = WAGON_SAVED + WAGON_N * 2;   // room for 15 heroes
+const uint16_t SAVE_LEN = WAGON_LIVE - SAVE_AT;     // what a chapter start saves (the live wagon isn't)
 uint16_t gold;
+__attribute__((noinline)) uint16_t tally() { uint16_t t = eeprom_read_word((const uint16_t*)TALLY); return t == 0xFFFF ? 0 : t; }   // (blank EEPROM: 0)
+// EEPROM is shared by every game on the device, so the save is mirrored to this game's own block of
+// FX flash and copied back at power-on: another game writing over bytes 80-500 can't lose it. The
+// last page is written first, so the page with the magic byte only lands once the rest is there.
+void mirrorSave() {
+  FX::eraseSaveBlock(0); FX::waitWhileBusy();
+  for (int8_t pg = (SAVE_LEN - 1) >> 8; pg >= 0; pg--) {
+    FX::writeEnable();
+    FX::seekCommand(SFC_WRITE, ((uint24_t)FX::programSavePage + pg) << 8);
+    uint16_t a = pg << 8;
+    do FX::writeByte(eeprom_read_byte((const uint8_t*)(SAVE_AT + a))); while ((++a & 0xFF) && a < SAVE_LEN);
+    FX::disable(); FX::waitWhileBusy();
+  }
+}
+void restoreSave() {
+  FX::seekSave(0);
+  if (FX::readPendingUInt8() == SAVE_MAGIC) {
+    eeprom_update_byte((uint8_t*)SAVE_AT, SAVE_MAGIC);
+    for (uint16_t a = 1; a < SAVE_LEN; a++) eeprom_update_byte((uint8_t*)(SAVE_AT + a), FX::readPendingUInt8());
+  }
+  FX::readEnd();
+}
 void copyWagon(uint16_t from, uint16_t to) {
   for (uint8_t i = 0; i < WAGON_N * 2; i++) eeprom_update_byte((uint8_t*)(to + i), from ? eeprom_read_byte((uint8_t*)(from + i)) : 0);
 }
@@ -367,9 +434,10 @@ void saveGame() {
   eeprom_update_word((uint16_t*)(SAVE_AT + 4), gold);
   eeprom_update_block(units, (void*)(SAVE_AT + 6), sizeof(Unit) * NUM_HEROES);
   copyWagon(WAGON_LIVE, WAGON_SAVED);
+  mirrorSave();
 }
 bool hasSave() { return eeprom_read_byte((const uint8_t*)SAVE_AT) == SAVE_MAGIC; }
-uint8_t savedChapter() { return eeprom_read_byte((const uint8_t*)(SAVE_AT + 1)); }
+__attribute__((noinline)) uint8_t savedChapter() { return eeprom_read_byte((const uint8_t*)(SAVE_AT + 1)); }
 uint8_t loadSave() {
   storyFlags = eeprom_read_word((const uint16_t*)(SAVE_AT + 2));
   gold = eeprom_read_word((const uint16_t*)(SAVE_AT + 4));
@@ -380,7 +448,7 @@ uint8_t loadSave() {
   return savedChapter();
 }
 // item slots of a hero, or of a wagon page (h >= WAGON)
-uint8_t* wagonPtr(uint8_t h, uint8_t s) { return (uint8_t*)(WAGON_LIVE + ((h - WAGON) * ITEM_SLOTS + s) * 2); }
+__attribute__((noinline)) uint8_t* wagonPtr(uint8_t h, uint8_t s) { return (uint8_t*)(WAGON_LIVE + ((h - WAGON) * ITEM_SLOTS + s) * 2); }
 uint8_t slotItem(uint8_t h, uint8_t s) { return h < WAGON ? units[h].item[s] : eeprom_read_byte(wagonPtr(h, s)); }
 uint8_t slotUses(uint8_t h, uint8_t s) { return h < WAGON ? units[h].uses[s] : eeprom_read_byte(wagonPtr(h, s) + 1); }
 void setSlot(uint8_t h, uint8_t s, uint8_t id, uint8_t uses) {
@@ -395,7 +463,7 @@ bool wagonPut(uint8_t id, uint8_t uses) {
 }
 
 // ================================================================ chapters
-uint24_t chapterAddr(uint8_t n) { return FX_GFX::chapters + FX::readIndexedUInt24(FX_GFX::chapters + 1, n); }
+__attribute__((noinline)) uint24_t chapterAddr(uint8_t n) { return FX_GFX::chapters + FX::readIndexedUInt24(FX_GFX::chapters + 1, n); }
 void loadChapter(uint8_t n) {
   chapter = n;
   chAddr = chapterAddr(n);
@@ -431,7 +499,7 @@ void loadChapter(uint8_t n) {
 }
 
 // Put the chosen heroes on the chapter's deployment slots, lord first.
-void placeArmy() {
+__attribute__((noinline)) void placeArmy() {
   uint8_t s = 0;
   for (uint8_t h = 0; h < NUM_HEROES; h++)
     if (deployMask & bit16(h)) {
@@ -451,7 +519,7 @@ uint8_t rosterAt(uint8_t row) {
   for (uint8_t h = 0; h < NUM_HEROES; h++) if (available(h) && !row--) return h;
   return NONE;                                                   // the BEGIN row
 }
-uint8_t deployedCount() { uint8_t n = 0; for (uint8_t h = 0; h < NUM_HEROES; h++) n += (deployMask >> h) & 1; return n; }
+__attribute__((noinline)) uint8_t deployedCount() { uint8_t n = 0; for (uint8_t h = 0; h < NUM_HEROES; h++) n += (deployMask >> h) & 1; return n; }
 void beginBattle() { placeArmy(); startBanner(false); }
 
 // ---------------------------------------------------------------- trade
@@ -468,7 +536,7 @@ void compact(uint8_t h) {                          // empty slots sink to the bo
   for (uint8_t s = 0; s < ITEM_SLOTS; s++) { uint8_t id = slotItem(h, s), u = slotUses(h, s); if (id) setSlot(h, n++, id, u); }
   while (n < ITEM_SLOTS) setSlot(h, n++, 0, 0);
 }
-void updateTrade() {
+__attribute__((noinline)) void updateTrade() {
   if (ab.justPressed(LEFT_BUTTON) || ab.justPressed(RIGHT_BUTTON)) { trCol ^= 1; sfx(S_MENU); }
   if (menuKeys(trRow, ITEM_SLOTS + 2)) confirmRow = NONE;   // name, the slots, THROW AWAY
   if (ab.justPressed(B_BUTTON)) { sfx(S_CANCEL); confirmRow = NONE; if (trHeld != NONE) trHeld = NONE; else state = ST_DEPLOY; return; }
@@ -507,9 +575,29 @@ void updateShop() {
   gold -= price; sfx(S_DING);
 }
 
+// ---------------------------------------------------------------- status
+// A unit's card: portrait, class, stats, items. From the map (A on a hero who has acted or a
+// captive, A again on an enemy's danger zone, ARMY in the game menu) or the deployment list
+// (RIGHT); LEFT/RIGHT step through that side (or the roster), A/B close it.
+uint8_t stU; bool stDeploy;
+__attribute__((noinline)) void openStatus(uint8_t u, bool fromDeploy) { stU = u; stDeploy = fromDeploy; state = ST_STATUS; sfx(S_CONFIRM); }
+__attribute__((noinline)) void updateStatus() {
+  if (ab.justPressed(RIGHT_BUTTON) || ab.justPressed(LEFT_BUTTON)) {   // the next of the same side (or of the roster)
+    uint8_t u = stU, e = isEnemy(stU);
+    do if (++u >= nUnits) u = 0;
+    while (isEnemy(u) != e || !(alive(u) || (stDeploy && available(u))));
+    stU = u; sfx(S_MENU);
+  }
+  if (!ab.justPressed(A_BUTTON) && !ab.justPressed(B_BUTTON)) return;
+  sfx(S_CANCEL);
+  state = stDeploy ? ST_DEPLOY : ST_SELECT;
+  if (!stDeploy) centerOn(units[stU].x, units[stU].y);
+}
+
 void updateDeploy() {
   uint8_t n = rosterCount(), shop = hasShop();
   menuKeys(menuSel, n + 2 + shop);                               // the army, ITEMS, [SHOP], BEGIN
+  if (ab.justPressed(RIGHT_BUTTON) && rosterAt(menuSel) != NONE) { openStatus(rosterAt(menuSel), true); return; }
   if (!ab.justPressed(A_BUTTON)) return;
   if (shop && menuSel == n + 1) { shopSel = 0; state = ST_SHOP; sfx(S_CONFIRM); return; }
   if (menuSel == n) {
@@ -544,6 +632,7 @@ void loadHeroes() { FX::readDataBytes(FX_GFX::tables + TB_HEROES, (uint8_t*)unit
 void newGame() {
   loadHeroes();
   storyFlags = 0; gold = 0;
+  eeprom_update_word((uint16_t*)TALLY, 0);
   copyWagon(0, WAGON_LIVE);                        // an empty wagon
   startChapter(START_AT);
 }
@@ -839,12 +928,12 @@ void updateSelect() {
   if (ab.justPressed(A_BUTTON)) {
     uint8_t u = unitAt(curX, curY);
     if (u == NONE) {                                      // the game menu
-      menuN = 4; menuOpt[0] = OPT_END; menuOpt[1] = OPT_SOUND; menuOpt[2] = OPT_RESTART; menuOpt[3] = OPT_QUIT;
+      menuN = 5; menuOpt[0] = OPT_END; menuOpt[1] = OPT_ARMY; menuOpt[2] = OPT_SOUND; menuOpt[3] = OPT_RESTART; menuOpt[4] = OPT_QUIT;
       menuSel = 0; confirmRow = NONE; state = ST_MENU; sfx(S_MENU);
     }
     else if (isEnemy(u)) { computeReach(u); state = ST_DANGER; sfx(S_CONFIRM); }
-    else if (!joined(u)) sfx(S_CANCEL);
-    else if (!(units[u].flags & F_MOVED)) {
+    else if (!joined(u) || (units[u].flags & F_MOVED)) openStatus(u, false);   // a captive, or done for the turn
+    else {
       sel = u; origX = units[u].x; origY = units[u].y;
       computeReach(u); state = ST_MOVE; sfx(S_CONFIRM);
     }
@@ -873,7 +962,7 @@ void updateMenu() {
   sfx(S_CONFIRM);
   switch (menuOpt[menuSel]) {
     case OPT_SOUND:
-      if (ab.audio.enabled()) { sound.noTone(); ab.audio.off(); } else { ab.audio.on(); sound.tones(S_CONFIRM); }
+      if (ab.audio.enabled()) { sndStop(); ab.audio.off(); } else { ab.audio.on(); sndPlay(S_CONFIRM); }
       ab.audio.saveOnOff();
       break;
     case OPT_ATTACK: buildTargets(sel); healMode = false; state = ST_TARGET; break;
@@ -888,6 +977,7 @@ void updateMenu() {
     case OPT_SEIZE: endChapter(true); break;
     case OPT_ITEM: menuSel = 0; state = ST_ITEMS; break;
     case OPT_WAIT: finishUnit(); break;
+    case OPT_ARMY: openStatus(0, false); break;               // the lord's card first
     case OPT_END:
       for (uint8_t i = 0; i < NUM_HEROES; i++) units[i].flags |= F_MOVED;
       startBanner(true); break;
@@ -912,8 +1002,8 @@ void startHealFx(uint8_t t, uint8_t might) {
 }
 
 // ITEM: A on a weapon equips it (free); A on a healing item uses it (ends the turn).
-uint8_t itemCount(uint8_t u) { uint8_t n = 0; while (n < ITEM_SLOTS && units[u].item[n]) n++; return n; }
-void updateItems() {
+__attribute__((noinline)) uint8_t itemCount(uint8_t u) { uint8_t n = 0; while (n < ITEM_SLOTS && units[u].item[n]) n++; return n; }
+__attribute__((noinline)) void updateItems() {
   menuKeys(menuSel, itemCount(sel));
   if (ab.justPressed(B_BUTTON)) { sfx(S_CANCEL); openUnitMenu(); return; }
   if (!ab.justPressed(A_BUTTON)) return;
@@ -949,7 +1039,7 @@ void updateItems() {
 }
 
 // HEAL: the staff restores its might in HP, wears a use, and teaches the healer
-void gainExp(uint8_t hero, uint8_t amount, bool onMap);
+__attribute__((noinline)) void gainExp(uint8_t hero, uint8_t amount, bool onMap);
 void startHeal(uint8_t t) {
   uint8_t s = staffFor(sel, units[t].maxHp - units[t].hp), might = idef(units[sel].item[s]).might;
   wear(sel, s);
@@ -1016,7 +1106,10 @@ void battleTick() {
         uint8_t u = k ? bD : bA, o = k ? bA : bD;
         if (units[u].hp) continue;
         units[u].flags &= ~F_ALIVE;
-        if (!isEnemy(u)) { units[u].flags |= F_FALLEN; if (!(units[u].flags & F_LORD)) lastWords = u; }   // permadeath
+        if (!isEnemy(u)) {                                // permadeath; the chapter goes on the memorial
+          units[u].flags |= F_FALLEN; units[u].exp = chapter;
+          if (!(units[u].flags & F_LORD)) lastWords = u;
+        }
         else if (!isEnemy(o)) claimDrop(o, u);
         fallEvents(u);
       }
@@ -1078,7 +1171,7 @@ void addStats(Unit& U) {                           // lvAmt[]: HP STR SKL SPD DE
   U.maxHp += lvAmt[0]; U.hp += lvAmt[0];
   for (uint8_t i = 1; i < 5; i++) stat[i - 1] += lvAmt[i];
 }
-void rollLevelUp(Unit& U) {
+__attribute__((noinline)) void rollLevelUp(Unit& U) {
   lvGains = 0;
   while (!lvGains)                                   // never an empty level-up
     for (uint8_t i = 0; i < 5; i++)
@@ -1199,22 +1292,13 @@ uint8_t glyph(uint8_t x, uint8_t y, char ch, uint8_t color, uint8_t scale) {
   }
   return x + (w + 1) * scale;
 }
-uint8_t text(uint8_t x, uint8_t y, const char* s, bool pgm, uint8_t color = BLACK, uint8_t scale = 1) {
-  for (;; s++) {
-    char ch = pgm ? pgm_read_byte(s) : *s;
-    if (!ch) break;
-    x = glyph(x, y, ch, color, scale);
-  }
+uint8_t text(uint8_t x, uint8_t y, const char* s, uint8_t color = BLACK, uint8_t scale = 1) {
+  for (; *s; s++) x = glyph(x, y, *s, color, scale);
   return x;
 }
-uint8_t textP(uint8_t x, uint8_t y, const char* s, uint8_t color = BLACK, uint8_t scale = 1) { return text(x, y, s, true, color, scale); }
-uint8_t textWidth(const char* s, bool pgm, uint8_t scale = 1) {
+uint8_t textWidth(const char* s, uint8_t scale = 1) {
   uint8_t w = 0;
-  for (;; s++) {
-    char ch = pgm ? pgm_read_byte(s) : *s;
-    if (!ch) break;
-    w += (FX::readIndexedUInt8(FX_GFX::font, (ch - 32) * 4) + 1) * scale;
-  }
+  for (; *s; s++) w += (FX::readIndexedUInt8(FX_GFX::font, (*s - 32) * 4) + 1) * scale;
   return w ? w - scale : 0;
 }
 char numBuf[6];
@@ -1223,20 +1307,20 @@ const char* num(uint16_t v) {
   do { *--p = '0' + v % 10; v /= 10; } while (v);
   return p;
 }
-uint8_t textN(uint8_t x, uint8_t y, uint16_t v, uint8_t color = BLACK) { return text(x, y, num(v), false, color); }
+uint8_t textN(uint8_t x, uint8_t y, uint16_t v, uint8_t color = BLACK) { return text(x, y, num(v), color); }
 uint8_t textNR(uint8_t xr, uint8_t y, uint16_t v, uint8_t color = BLACK) {   // right-aligned
   const char* s = num(v);
-  return text(xr - textWidth(s, false), y, s, false, color);
+  return text(xr - textWidth(s), y, s, color);
 }
 // Names (units, classes, items, terrain) live on FX; str() reads one into a buffer.
 // The buffer is reused, so draw a name before fetching the next.
 const char* str(uint8_t i) { FX::readDataBytes(FX_GFX::strings + i * STR_LEN, (uint8_t*)strBuf, STR_LEN); return strBuf; }
 const char* nameOf(uint8_t u) { return str(STR_NAME + units[u].name); }
 const char* itemName(uint8_t id) { return str(STR_ITEM + id); }
-uint8_t textS(uint8_t x, uint8_t y, const char* s, uint8_t color = BLACK) { return text(x, y, s, false, color); }
+uint8_t textS(uint8_t x, uint8_t y, const char* s, uint8_t color = BLACK) { return text(x, y, s, color); }
 // UI text lives on FX too (U_ ids from story.h)
-uint8_t ui(uint8_t x, uint8_t y, uint8_t id, uint8_t color = BLACK, uint8_t scale = 1) { return text(x, y, str(id), false, color, scale); }
-void uiCentred(uint8_t y, uint8_t id, uint8_t color, uint8_t scale = 1) { str(id); text(64 - textWidth(strBuf, false, scale) / 2, y, strBuf, false, color, scale); }
+uint8_t ui(uint8_t x, uint8_t y, uint8_t id, uint8_t color = BLACK, uint8_t scale = 1) { return text(x, y, str(id), color, scale); }
+void uiCentred(uint8_t y, uint8_t id, uint8_t color, uint8_t scale = 1) { str(id); text(64 - textWidth(strBuf, scale) / 2, y, strBuf, color, scale); }
 
 // A plank: white board with notched (chiselled) corners.
 void plank(uint8_t x, uint8_t y, uint8_t w, uint8_t h) {
@@ -1245,7 +1329,7 @@ void plank(uint8_t x, uint8_t y, uint8_t w, uint8_t h) {
   ab.drawPixel(x, y + h - 1, BLACK); ab.drawPixel(x + w - 1, y + h - 1, BLACK);
   ab.drawPixel(x, y + h / 2, BLACK); ab.drawPixel(x + w - 1, y + h / 2, BLACK);
 }
-void prompt(uint8_t y) {                    // blinking "next" chevron
+__attribute__((noinline)) void prompt(uint8_t y) {                    // blinking "next" chevron
   if (ab.frameCount & 16) { ab.drawFastHLine(119, y, 5); ab.drawFastHLine(120, y + 1, 3); ab.drawPixel(121, y + 2); }
 }
 
@@ -1366,9 +1450,9 @@ void drawHud() {
     Unit& U = units[u];
     x = textS(2, 58, nameOf(u));
     x = textS(x + 5, 58, str(STR_CLASS + U.cls));
-    x = textP(x + 5, 58, PSTR("LV")); x = textN(x + 1, 58, U.lv);
-    x = textP(x + 5, 58, PSTR("HP ")); x = textN(x, 58, U.hp); x = textP(x + 1, 58, PSTR("/")); x = textN(x + 1, 58, U.maxHp);
-    x = textP(x + 5, 58, PSTR("MV ")); textN(x, 58, (U.flags & F_HOLD) ? 0 : clsMov(u));
+    x = ui(x + 5, 58, U_LV); x = textN(x + 1, 58, U.lv);
+    x = ui(x + 5, 58, U_HP) + 3; x = textN(x, 58, U.hp); x = glyph(x + 1, 58, '/', BLACK, 1); x = textN(x + 1, 58, U.maxHp);
+    x = ui(x + 5, 58, U_MV); textN(x, 58, (U.flags & F_HOLD) ? 0 : clsMov(u));
   } else {
     uint8_t t = terrainAt(curX, curY);
     x = textS(2, 58, str(STR_TERRAIN + t));
@@ -1380,13 +1464,13 @@ void drawHud() {
       x = ui(x + 8, 58, U_DEF); x = textN(x, 58, tDef(t));
       x = ui(x + 6, 58, U_AVO); textN(x, 58, tAvoid(t));
     }
-    x = textP(96, 58, PSTR("T")); textN(x + 1, 58, turn);
-    if (objType == OBJ_SURVIVE) { x = textP(x + 9, 58, PSTR("/")); textN(x + 1, 58, objTurns); }
+    x = glyph(96, 58, 'T', BLACK, 1); textN(x + 1, 58, turn);
+    if (objType == OBJ_SURVIVE) { x = glyph(x + 9, 58, '/', BLACK, 1); textN(x + 1, 58, objTurns); }
   }
 }
 
 // a framed list box; labels come from fn(i). Used by the unit menu and items.
-void listBox(uint8_t x, uint8_t w, uint8_t n, uint8_t selIdx, const char* (*label)(uint8_t), uint8_t (*right)(uint8_t), bool pgm) {
+void listBox(uint8_t x, uint8_t w, uint8_t n, uint8_t selIdx, const char* (*label)(uint8_t), uint8_t (*right)(uint8_t)) {
   uint8_t h = n * 8 + 5, y = 3;
   ab.fillRect(x - 2, y - 2, w + 4, h + 4, BLACK);
   ab.drawRect(x, y, w, h, WHITE);
@@ -1395,7 +1479,7 @@ void listBox(uint8_t x, uint8_t w, uint8_t n, uint8_t selIdx, const char* (*labe
     uint8_t ry = y + 3 + i * 8;
     uint8_t c = WHITE;
     if (i == selIdx) { plank(x + 2, ry - 1, w - 4, 8); c = BLACK; }
-    text(x + 5, ry + 1, label(i), pgm, c);
+    text(x + 5, ry + 1, label(i), c);
     if (right) { uint8_t v = right(i); if (v != NONE) textNR(x + w - 5, ry + 1, v, c); }
   }
 }
@@ -1409,13 +1493,13 @@ const char* menuLabel(uint8_t i) {                 // U_ATTACK.. follow the OPT_
 }
 const char* itemLabel(uint8_t i) { return itemName(units[sel].item[i]); }
 uint8_t itemUses(uint8_t i) { uint8_t id = units[sel].item[i]; return consumable(id) ? units[sel].uses[i] & 0x7F : NONE; }
-uint8_t menuX(uint8_t w) { return (curX - camX) < VIEW_W / 2 ? 128 - w - 3 : 3; }
-void drawMenu() { listBox(menuX(44), 44, menuN, menuSel, menuLabel, nullptr, false); }
-void drawItems() {
-  listBox(menuX(68), 68, itemCount(sel), menuSel, itemLabel, itemUses, false);
+__attribute__((noinline)) uint8_t menuX(uint8_t w) { return (curX - camX) < VIEW_W / 2 ? 128 - w - 3 : 3; }
+void drawMenu() { listBox(menuX(44), 44, menuN, menuSel, menuLabel, nullptr); }
+void drawItems() {                                 // NAME ... E 20: the longest name ends at 51
+  listBox(menuX(72), 72, itemCount(sel), menuSel, itemLabel, itemUses);
   uint8_t e = equipSlot(sel);
-  if (e != NONE)                                    // "E" marks the wielded weapon
-    textP(menuX(68) + 60, 7 + e * 8, PSTR("E"), e == menuSel ? BLACK : WHITE);
+  if (e != NONE)                                    // "E" marks the wielded weapon, clear of the uses
+    glyph(menuX(72) + 54, 7 + e * 8, 'E', e == menuSel ? BLACK : WHITE, 1);
 }
 
 // ============================================================== forecast
@@ -1423,7 +1507,7 @@ void drawItems() {
 void x2Badge(uint8_t x, uint8_t y) {     // "x2" across the shield of whoever strikes twice
   ab.fillRect(x - 1, y - 1, 23, 16, BLACK);
   plank(x, y, 21, 14);
-  textP(x + 3, y + 2, PSTR("X2"), BLACK, 2);
+  ui(x + 3, y + 2, U_X2, BLACK, 2);
 }
 void drawForecast() {
   uint8_t A = sel, D = tgt[tgtSel];
@@ -1435,24 +1519,24 @@ void drawForecast() {
     uint8_t y = 4 + r * 9;
     uiCentred(y, r ? U_DMG - 1 + r : U_HP, WHITE);
     textNR(50, y, lv[r], WHITE);
-    if (r == 0 || fD.can) textN(79, y, rv[r], WHITE); else textP(79, y, PSTR("--"), WHITE);
+    if (r == 0 || fD.can) textN(79, y, rv[r], WHITE); else ui(79, y, U_DASH, WHITE);
     if (r < 3) for (uint8_t x = 38; x < 92; x += 2) ab.drawPixel(x, y + 7, WHITE);
   }
   if (fA.dbl) x2Badge(18, 27);
   if (fD.can && fD.dbl) x2Badge(88, 27);
   plank(0, 47, 54, 7); textS(3, 48, nameOf(A));
-  plank(74, 47, 54, 7); nameOf(D); textS(125 - textWidth(strBuf, false), 48, strBuf);
+  plank(74, 47, 54, 7); nameOf(D); textS(125 - textWidth(strBuf), 48, strBuf);
   plank(0, 57, 128, 7);
   uint8_t sa = equipSlot(A), sd = equipSlot(D);            // the weapons in play
   textS(3, 58, itemName(units[A].item[sa]));
-  if (sd != NONE) { itemName(units[D].item[sd]); textS(125 - textWidth(strBuf, false), 58, strBuf); }
+  if (sd != NONE) { itemName(units[D].item[sd]); textS(125 - textWidth(strBuf), 58, strBuf); }
 }
 
 // ================================================================ battle
 void ring(int16_t cx, int16_t cy, uint8_t r);
 bool casts(uint8_t u) { uint8_t s = equipSlot(u); return s != NONE && kindOf(units[u].item[s]) == K_TOME; }
 bool afar() { return dist2(bA, bD) > 1 || casts(bStriker); }   // the striker stays put: a shot or a spell
-int8_t advance(uint8_t u) {               // how far a melee striker has dashed in
+__attribute__((noinline)) int8_t advance(uint8_t u) {               // how far a melee striker has dashed in
   if (u != bStriker || afar()) return 0;
   uint8_t t = STRIKE_T - timer;
   if (t < 10) return t + t / 2;
@@ -1489,10 +1573,10 @@ void battlePlank(uint8_t x, uint8_t u) {
   }
 }
 void tagPlank(int16_t cx, int16_t y, const char* s) {       // a word on a board, centred on cx
-  uint8_t w = textWidth(s, false) + 6;
+  uint8_t w = textWidth(s) + 6;
   int16_t px = cx - w / 2; if (px < 1) px = 1; if (px + w > 127) px = 127 - w;
   ab.fillRect(px - 1, y - 1, w + 2, 11, BLACK);
-  plank(px, y, w, 9); text(px + 3, y + 2, s, false);
+  plank(px, y, w, 9); text(px + 3, y + 2, s);
 }
 void drawBattle() {
   uint8_t L = isEnemy(bA) ? bD : bA, R = isEnemy(bA) ? bA : bD;   // heroes on the left
@@ -1582,8 +1666,8 @@ void drawHealFx() {
 }
 void drawDeploy() {
   uint8_t n = rosterCount(), h = rosterAt(menuSel);
-  plank(0, 0, 70, 8);
-  textN(textP(textN(ui(3, 1, U_DEPLOY), 1, deployedCount()) + 1, 1, PSTR("/")) + 1, 1, deployMax);
+  plank(0, 0, 70, 8);                                     // DEPLOY 5/6, but never more than the army has
+  textN(glyph(textN(ui(3, 1, U_DEPLOY), 1, deployedCount()) + 1, 1, '/', BLACK, 1) + 1, 1, n < deployMax ? n : deployMax);
   uint8_t top = menuSel > 6 ? menuSel - 6 : 0;            // 7 rows show; the list scrolls
   uint8_t shop = hasShop();
   for (uint8_t r = top; r <= n + 1 + shop && r < top + 7; r++) {
@@ -1594,7 +1678,7 @@ void drawDeploy() {
     ab.drawRect(3, y, 5, 5, c);
     if (deployMask & bit16(u)) ab.fillRect(4, y + 1, 3, 3, c);
     textS(11, y, nameOf(u), c);
-    textN(textP(50, y, PSTR("LV"), c) + 1, y, units[u].lv, c);
+    textN(ui(50, y, U_LV, c) + 1, y, units[u].lv, c);
   }
   if (h != NONE) drawPortrait(units[h].name, 72);
   else if (menuSel == n || (shop && menuSel == n + 1)) {
@@ -1603,7 +1687,7 @@ void drawDeploy() {
   }
   else { ui(78, 20, U_ATOFIGHT, WHITE); ui(78, 30, U_THELORD, WHITE); ui(78, 38, U_ALWAYS, WHITE); }
 }
-void drawShop() {
+__attribute__((noinline)) void drawShop() {
   plank(0, 0, 128, 8);
   ui(3, 1, U_SHOP); textN(ui(70, 1, U_GOLD), 1, gold);
   for (uint8_t i = 0; i < SHOP_SIZE && shopItem(i); i++) {
@@ -1637,6 +1721,28 @@ void drawTrade() {
   plank(0, 57, 128, 7);
   ui(ui(3, 58, trHeld == NONE ? U_TR1 : U_TR3), 58, trHeld == NONE ? U_TR2 : U_TR4);
 }
+// the card's numbers, right-aligned (labels, plank and rule are the FX 'card' image at x = 56):
+// HP, max HP, STR, SKL, SPD, DEF (Unit order), then LV and MV
+const uint8_t ST_VAL[] PROGMEM = { 76, 17, 89, 17, 89, 24, 125, 24, 89, 31, 125, 31, 125, 10, 125, 17 };
+void drawStatus() {
+  Unit& U = units[stU];
+  if (nameInfo(U.name, 0) != NONE) drawPortrait(U.name, 0);       // the rank and file have no portrait: their figure
+  else FX::drawBitmap(-8, 8, FX_GFX::figures, nameInfo(U.name, 2) * 2, dbmMasked);
+  FX::drawBitmap(56, 0, FX_GFX::card, 0, dbmNormal);
+  textS(60, 1, nameOf(stU));
+  if (!isEnemy(stU)) ab.drawFastHLine(57, 8, (U.exp * 91) >> 7);  // EXP: a carved line under the name (x 0.71)
+  textS(59, 10, str(STR_CLASS + U.cls), WHITE);
+  uint8_t v[8]; memcpy(v, &U.hp, 6); v[6] = U.lv; v[7] = (U.flags & F_HOLD) ? 0 : clsMov(stU);
+  for (uint8_t i = 0; i < 8; i++) textNR(pgm_read_byte(&ST_VAL[i * 2]), pgm_read_byte(&ST_VAL[i * 2 + 1]), v[i], WHITE);
+  uint8_t e = equipSlot(stU);
+  for (uint8_t k = 0; k < ITEM_SLOTS && U.item[k]; k++) {
+    uint8_t y = 40 + k * 6;
+    if (k == e) ab.fillRect(58, y, 2, 5);                   // the weapon in hand
+    else if (U.uses[k] & USES_DROP) ab.drawPixel(59, y + 2); // an enemy's: it drops this one
+    textS(62, y, itemName(U.item[k]), WHITE);
+    if (consumable(U.item[k])) textNR(125, y, U.uses[k] & 0x7F, WHITE);
+  }
+}
 void drawPortrait(uint8_t name, uint8_t x) {
   uint8_t pf = nameInfo(name, 0);
   if (pf != NONE) FX::drawBitmap(x, 0, FX_GFX::portraits, pf, dbmNormal);
@@ -1655,7 +1761,7 @@ void drawLevelUp() {
     uint8_t v = val[r] - (rose && !shown ? lvAmt[r] : 0);
     ui(62, y, U_HP + r, WHITE);
     textNR(90, y, v, WHITE);
-    if (rose && shown) { plank(95, y - 1, 15, 7); textN(textP(98, y, PSTR("+")), y, lvAmt[r]); }
+    if (rose && shown) { plank(95, y - 1, 15, 7); textN(glyph(98, y, '+', BLACK, 1), y, lvAmt[r]); }
     uint8_t notches = r == 0 ? v / 2 : v;            // carved growth bar
     for (uint8_t i = 0; i < notches && i < 32; i++) ab.drawFastVLine(62 + i * 2, y + 6, 2, WHITE);
   }
@@ -1664,21 +1770,30 @@ void drawLevelUp() {
 
 // ============================================================== dialogue
 // Lines stream from the chapter record on FX: condition, speaker, length, text.
-// Condition: 0 always; else bits 0-5 = a flag that must be set, or with bit 7 a hero who must be
-// in the army; bit 6 inverts it. Lines whose condition fails are skipped.
+// Condition: 0 always; else bits 0-5 = a flag that must be set, or with bit 7 a hero (bits 0-3) who
+// must be in the army -- or, with bit 5 too, who joined and fell; bit 6 inverts it. A line with
+// speaker 255 is a guard: the line after it also needs the guard's condition ([14][MAREN] ...).
+// Lines whose conditions fail are skipped.
+bool cond(uint8_t c) {
+  uint8_t h = c & 15;
+  bool ok = !(c & 0x3F) || (!(c & 0x80) ? flagSet(c & 0x3F) :
+            (c & 0x20) ? (units[h].flags & (F_JOINED | F_FALLEN)) == (F_JOINED | F_FALLEN) : available(h));
+  return ok != bool(c & 0x40);
+}
 bool loadLine() {                                         // false when the scene has run out
+  bool skip = false;
   for (; talkLeft; talkLeft--) {
-    uint8_t c = FX::readIndexedUInt8(talkAddr, 0);
     talkWho = FX::readIndexedUInt8(talkAddr, 1);
     talkLen = FX::readIndexedUInt8(talkAddr, 2);
     talkShown = 0;
-    bool ok = !(c & 0x3F) || ((c & 0x80) ? available(c & 0x3F) : flagSet(c & 0x3F));
-    if (ok != bool(c & 0x40)) return true;
+    bool ok = !skip && cond(FX::readIndexedUInt8(talkAddr, 0));
+    if (talkWho != NONE) { if (ok) return true; skip = false; }
+    else skip = !ok;
     talkAddr += 3 + talkLen;
   }
   return false;
 }
-void finishTalk() {
+__attribute__((noinline)) void finishTalk() {
   if (talkReturn == ST_BATTLE) musicStop();               // the boss's motif ends as steel meets steel
   state = talkReturn;
   switch (state) {
@@ -1723,7 +1838,7 @@ void updateTalk() {
     if (!loadLine()) finishTalk();
   }
 }
-void drawTalk() {
+__attribute__((noinline)) void drawTalk() {
   drawPortrait(talkWho);
   plank(60, 2, 66, 9); textS(63, 4, str(STR_NAME + talkWho));
   uint8_t x = 60, y = 16;
@@ -1740,47 +1855,69 @@ void drawBanner() {
   ab.fillRect(0, 18, 128, 27, BLACK);
   for (uint8_t x = 0; x < 128; x += 2) { ab.drawPixel(x, 18); ab.drawPixel(x + 1, 44); }
   str(enemyPhase ? U_ENEMYPH : U_PLAYERPH);
-  uint8_t w = textWidth(strBuf, false, 2) + 10;
+  uint8_t w = textWidth(strBuf, 2) + 10;
   plank(64 - w / 2, 21, w, 14);
-  text(64 - w / 2 + 5, 23, strBuf, false, BLACK, 2);
+  text(64 - w / 2 + 5, 23, strBuf, BLACK, 2);
   plank(48, 37, 32, 7); textN(ui(53, 38, U_TURN), 38, turn);
 }
 bool lastChapter() { return nextChapter(chapter) >= NUM_CHAPTERS; }
+uint8_t chLabel(uint8_t x, uint8_t y, uint8_t ch, uint8_t c) {   // "3" or "3X": the chapter's own label
+  uint8_t lab = FX::readIndexedUInt8(chapterAddr(ch), CH_LABEL);
+  x = textN(x, y, lab & 0x7F, c);
+  return (lab & 0x80) ? glyph(x, y, 'X', c, 1) : x;
+}
+// the fixed parts of these screens are FX images ('pages'): 0 victory, 1 defeat, 2 the record
+__attribute__((noinline)) void frame(uint8_t page) { FX::drawBitmap(0, 0, FX_GFX::pages, page, dbmNormal); }
 void drawEnd() {
-  ab.drawRect(0, 0, 128, 64); ab.drawRect(2, 2, 124, 60);
-  for (uint8_t i = 6; i < 124; i += 6) { ab.drawPixel(i, 2, BLACK); ab.drawPixel(i, 61, BLACK); }
-  uiCentred(8, won ? U_VICTORY : U_DEFEAT, WHITE, 3);
-  if (won) {
-    uiCentred(26, lastChapter() ? U_CONTINUED : U_CLEAR, WHITE);
-    uint8_t n = 0, first = NONE;                           // who fell this chapter (deployed, now fallen)
-    for (uint8_t h = 0; h < NUM_HEROES; h++)
-      if ((deployMask & bit16(h)) && (units[h].flags & F_FALLEN)) { if (!n++) first = h; }
-    if (n) {                                               // FELL: HALE +1
-      uint8_t x = ui(36, 34, U_FELL, WHITE); x = textS(x, 34, nameOf(first), WHITE);
-      if (n > 1) textN(textP(x + 3, 34, PSTR("+"), WHITE), 34, n - 1, WHITE);
-    }
-    for (uint8_t i = 0; i < 2; i++) {                      // ONWARD (saves) / RESTART (this chapter again)
-      uint8_t y = 43 + i * 9, c = WHITE;
-      if (i == titleSel) { plank(30, y - 1, 68, 8); c = BLACK; }
-      uiCentred(y, i ? U_RESTART : (lastChapter() ? U_ATITLE : U_ONWARD), c);
-    }
-    return;
+  frame(!won);                                             // "DEFEAT / BRANNOCK HAS FALLEN / A RETRY" is all image
+  if (!won) return;
+  uiCentred(26, lastChapter() ? U_CONTINUED : U_CLEAR, WHITE);
+  uint8_t n = 0, first = NONE;                             // who fell this chapter (deployed, now fallen)
+  for (uint8_t h = 0; h < NUM_HEROES; h++)
+    if ((deployMask & bit16(h)) && (units[h].flags & F_FALLEN)) { if (!n++) first = h; }
+  if (n) {                                                 // FELL: HALE +1
+    uint8_t x = ui(36, 34, U_FELL, WHITE); x = textS(x, 34, nameOf(first), WHITE);
+    if (n > 1) textN(glyph(x + 3, 34, '+', WHITE, 1), 34, n - 1, WHITE);
   }
-  char t[STR_LEN * 2]; strcpy(t, str(STR_NAME)); strcat(t, str(U_FALLEN));      // "BRANNOCK HAS FALLEN"
-  text(64 - textWidth(t, false) / 2, 32, t, false, WHITE);
-  plank(30, 47, 68, 7);
-  uiCentred(48, U_RETRY, BLACK);
+  for (uint8_t i = 0; i < 2; i++) {                        // ONWARD (saves) / RESTART (this chapter again)
+    uint8_t y = 43 + i * 9, c = WHITE;
+    if (i == titleSel) { plank(30, y - 1, 68, 8); c = BLACK; }
+    uiCentred(y, i ? U_RESTART : U_ONWARD, c);
+  }
 }
 // The chapter's save is only replaced when the player goes ONWARD, so a costly win can be replayed.
+// After the last chapter, ONWARD opens the epilogue instead (and the save stays at its start).
 void updateEnd() {
   if (won) menuKeys(titleSel, 2);
   if (!ab.justPressed(A_BUTTON)) return;
-  if (!won || titleSel) startChapter(loadSave());     // retry / restart from the chapter's start
-  else if (!lastChapter()) {                          // heroes carry their levels and items; the purse grows
-    gold += FX::readIndexedUInt8(chAddr, CH_REWARD) * 10;
-    startChapter(nextChapter(chapter));
-  }
-  else state = ST_TITLE;
+  if (!won || titleSel) { startChapter(loadSave()); return; }   // retry / restart from the chapter's start
+  if (lastChapter()) { state = ST_EPILOGUE; sfx(S_CONFIRM); return; }
+  gold += FX::readIndexedUInt8(chAddr, CH_REWARD) * 10;          // heroes carry their levels and items; the purse grows
+  eeprom_update_word((uint16_t*)TALLY, tally() + turn - (objType == OBJ_SURVIVE));
+  startChapter(nextChapter(chapter));
+}
+
+// ================================================================ epilogue
+// After the last chapter (whose win scene carries the endings and the roll of the fallen):
+// the record -- allies won, heroes lost, side chapters found, turns taken -- and a rank for it.
+const uint8_t RANK_AT[] PROGMEM = { 70, 54, 40, 26 };             // S A B C, else D
+const uint16_t TURNS_FAST = 230, TURNS_SLOW = 300;                // the whole campaign, in turns (about 60 of them are survive chapters)
+__attribute__((noinline)) __attribute__((noinline)) uint8_t rankOf(int8_t score, uint16_t turns) {   // 0 S .. 4 D
+  score += turns < TURNS_FAST ? 20 : turns < TURNS_SLOW ? 10 : 0;
+  uint8_t k = 0;
+  while (k < 4 && score < (int8_t)pgm_read_byte(&RANK_AT[k])) k++;
+  return k;
+}
+void drawEpilogue() {
+  frame(2);
+  uint8_t allies = 0, lost = 0, found = 0;
+  for (uint8_t h = 0; h < NUM_HEROES; h++) { allies += joined(h); lost += cond(0xA0 | h); }
+  for (uint16_t f = storyFlags & SIDE_FLAGS; f; f >>= 1) found += f & 1;
+  uint16_t turns = tally() + turn - (objType == OBJ_SURVIVE);
+  uint8_t k = rankOf(found * 4 + allies * 2 - lost * 6, turns);
+  textNR(50, 17, allies, WHITE); textNR(50, 25, lost, WHITE); textNR(50, 33, found, WHITE); textNR(50, 41, turns, WHITE);
+  glyph(90, 24, k ? 'A' - 1 + k : 'S', WHITE, 3);
+  uiCentred(52, U_RANK0 + k, WHITE);
 }
 
 void drawTitle() {
@@ -1790,15 +1927,11 @@ void drawTitle() {
     uint8_t y = 43 + i * 10;
     if (i == titleSel) plank(32, y, 64, 8);
     uint8_t c = i == titleSel ? BLACK : WHITE;
-    if (i == 0) {                                  // "CONTINUE CH 3X": the chapter's own label
-      uint8_t lab = FX::readIndexedUInt8(chapterAddr(savedChapter()), CH_LABEL);
-      uint8_t x = textN(ui(36, y + 2, U_CONTINUE, c), y + 2, lab & 0x7F, c);
-      if (lab & 0x80) glyph(x + 1, y + 2, 'X', c, 1);
-    }
+    if (i == 0) chLabel(ui(36, y + 2, U_CONTINUE, c), y + 2, savedChapter(), c);   // "CONTINUE CH 3X"
     else ui(36, y + 2, U_NEWGAME, c);
   }
 }
-void updateTitle() {
+__attribute__((noinline)) void updateTitle() {
   if (!hasSave()) { newGame(); return; }
   menuKeys(titleSel, 2);
   if (ab.justPressed(A_BUTTON)) { sfx(S_CONFIRM); if (titleSel == 0) startChapter(loadSave()); else newGame(); }
@@ -1813,7 +1946,7 @@ void setup() {
   ab.waitNoButtons();
   ab.setFrameRate(30);
   rngState = ab.generateRandomSeed() | 1;   // never 0: xorshift would stick there
-  FX::begin(FX_DATA_PAGE);
+  FX::begin(FX_DATA_PAGE, FX_SAVE_PAGE);
   // The chapter blob starts with the chapter count. If that doesn't read back, the FX data
   // is missing or the build targets the wrong flash pin (FX vs FX-C): say so instead of hanging.
   // (The font lives on FX too, so the warning is a big X and the red LED.)
@@ -1823,13 +1956,14 @@ void setup() {
     ab.display();
     while (true) {}
   }
+  restoreSave();
   state = ST_TITLE;
 }
 
 void loop() {
   if (!ab.nextFrame()) return;
   ab.pollButtons();
-  if (musicOn && !sound.playing()) musicOn = false;         // a one-shot motif finished
+  if (musicOn && !sndOn) musicOn = false;         // a one-shot motif finished
 
   switch (state) {
     case ST_TITLE:    updateTitle();    if (state == ST_TITLE) drawTitle(); break;
@@ -1845,7 +1979,7 @@ void loop() {
       ui(92, 3, ab.audio.enabled() ? U_SNDON : U_SNDOFF);
       if (ab.justPressed(A_BUTTON)) startTalk(SC_OPEN, ST_DEPLOY);
       break;
-    case ST_DEPLOY:   updateDeploy();   if (state == ST_DEPLOY) drawDeploy(); break;
+    case ST_DEPLOY:   updateDeploy();   drawDeploy(); break;
     case ST_TALK:     updateTalk();     if (state == ST_TALK) drawTalk(); break;
     case ST_BANNER:
       if (timer) timer--;
@@ -1858,8 +1992,9 @@ void loop() {
     case ST_SELECT:   updateSelect();   if (bHold >= MINIMAP_HOLD) drawMinimap(); else { drawMap(false); drawCursor(); drawHud(); } break;
     case ST_MOVE:     updateMove();     drawMap(true);  drawCursor(); drawHud(); break;
     case ST_WALK:     updateWalk();     drawMap(false); drawHud(); break;
-    case ST_DANGER:
-      if (ab.justPressed(A_BUTTON) || ab.justPressed(B_BUTTON)) state = ST_SELECT;
+    case ST_DANGER:                                          // A again: that enemy's card
+      if (ab.justPressed(A_BUTTON)) openStatus(unitAt(curX, curY), false);
+      else if (ab.justPressed(B_BUTTON)) state = ST_SELECT;
       drawMap(true, true); drawCursor(); drawHud(); break;
     case ST_MENU:     updateMenu();     drawMap(false); drawCursor(); drawHud(); if (state == ST_MENU) drawMenu(); break;
     case ST_ITEMS:    updateItems();    drawMap(false); drawCursor(); drawHud(); if (state == ST_ITEMS) drawItems(); else if (state == ST_MENU) drawMenu(); break;
@@ -1869,6 +2004,7 @@ void loop() {
     case ST_HEALFX:   drawHealFx();     if (!--timer) { if (bA == bD) finishBattle(); else gainExp(bA, 12, true); } break;
     case ST_TRADE:    updateTrade();    if (state == ST_TRADE) drawTrade(); else drawDeploy(); break;
     case ST_SHOP:     updateShop();     if (state == ST_SHOP) drawShop(); else drawDeploy(); break;
+    case ST_STATUS:   updateStatus();   drawStatus(); break;      // (on closing, the card shows one frame more)
     case ST_GOT:
       drawGot();
       if (!--timer || ab.justPressed(A_BUTTON)) { if (gotOnMap) afterAction(); else startExp(); }
@@ -1877,6 +2013,10 @@ void loop() {
     case ST_LEVELUP:  updateLevelUp();  if (state == ST_LEVELUP) drawLevelUp(); break;
     case ST_ENEMY:    updateEnemy();    drawMap(false); if (state == ST_ENEMY) { drawCursor(); drawHud(); } break;
     case ST_END:      drawEnd();        updateEnd(); break;
+    case ST_EPILOGUE:                                        // A: back to the title
+      drawEpilogue();
+      if (ab.justPressed(A_BUTTON)) { sfx(S_CONFIRM); titleSel = 0; state = ST_TITLE; }
+      break;
   }
   FX::display(CLEAR_BUFFER);
 }

@@ -28,7 +28,9 @@ chapters.bin layout (multi-byte values big-endian, as ArduboyFX reads them):
           +366       enemies: count x Unit (the sketch's 21-byte struct, loaded verbatim;
                      an enemy's exp byte holds its group number)
           scenes     line count, then per line: condition, speaker id, length, text ('\\n' breaks)
-                     condition: 0 always; flag N (must be set) or 0x80|hero (must be in the army); +0x40 = not
+                     condition: 0 always; flag N (must be set) or 0x80|hero (must be in the army), 0xA0|hero
+                     (joined and fell); +0x40 = not. Speaker 255 = a guard (no text): the next line
+                     also needs its condition -- how [A][B] SPEAKER: ... is stored
 
 EVENT (10 bytes): when | flags, p1, p2, actions, group, set-flag, until-flag, warp x, warp y, needs-flag
   when: 1 tile X Y (a hero walks over it; for warps, stops on it), 2 turn N [every K],
@@ -71,7 +73,7 @@ TERRAIN_NAMES = ['PLAIN', 'WOOD', 'HILL', 'WATER', 'WALL', 'KEEP', 'FORD', 'VILL
 # in the sketch's OPT_ order, then SOUND OFF / OPEN / SURE? (menuLabel() relies on this order).
 UI = [('ATTACK', 'ATTACK'), ('SEIZE', 'SEIZE'), ('TALK', 'TALK'), ('VISIT', 'VISIT'), ('HEAL', 'HEAL'),
       ('ITEM', 'ITEM'), ('WAIT', 'WAIT'), ('END', 'END TURN'), ('SOUND', 'SOUND ON'), ('RESTART', 'RESTART'),
-      ('QUIT', 'QUIT'), ('SOUNDOFF', 'SOUND OFF'), ('OPEN', 'OPEN'), ('SURE', 'SURE?'),
+      ('QUIT', 'QUIT'), ('ARMY', 'ARMY'), ('SOUNDOFF', 'SOUND OFF'), ('OPEN', 'OPEN'), ('SURE', 'SURE?'),
       ('CAPTIVE', 'CAPTIVE  TALK'), ('BYT', 'BY T'), ('IMPASS', 'IMPASSABLE'), ('EMPTY', 'EMPTY'), ('VISITED', 'VISITED'),
       ('STOPOPEN', 'STOP TO OPEN'), ('STOPVISIT', 'STOP TO VISIT'), ('DEF', 'DEF '), ('AVO', 'AVO '),
       ('HP', 'HP'), ('STR', 'STR'), ('SKL', 'SKL'), ('SPD', 'SPD'), ('DEFS', 'DEF'),          # level-up rows
@@ -81,12 +83,14 @@ UI = [('ATTACK', 'ATTACK'), ('SEIZE', 'SEIZE'), ('TALK', 'TALK'), ('VISIT', 'VIS
       ('THELORD', 'THE LORD'), ('ALWAYS', 'ALWAYS GOES'),
       ('TR1', 'A TAKE  B DONE'), ('TR2', '  ROW 1: HERO'), ('TR3', 'A PUT HERE / '), ('TR4', 'SWAP   B UNDO'),
       ('NOW', 'NOW '), ('LVUPLV', 'LEVEL UP  LV '), ('ENEMYPH', 'ENEMY PHASE'), ('PLAYERPH', 'PLAYER PHASE'), ('TURN', 'TURN '),
-      ('VICTORY', 'VICTORY'), ('DEFEAT', 'DEFEAT'), ('FALLEN', ' HAS FALLEN'), ('CONTINUED', 'TO BE CONTINUED'),
-      ('CLEAR', 'CHAPTER CLEAR'), ('RETRY', 'A  RETRY'), ('ATITLE', 'TO THE TITLE'), ('ONWARD', 'ONWARD'),
+      ('CONTINUED', 'THE BELL TOLLS'), ('CLEAR', 'CHAPTER CLEAR'), ('ONWARD', 'ONWARD'),
       ('FELL', 'FELL: '), ('DISCARD', 'THROW AWAY'), ('US', 'ARMY '), ('FOES', 'FOES '),
       ('BROKE', 'BROKE!'), ('WAGON', 'WAGON '), ('TOWAGON', 'TO WAGON'), ('GOLD', 'GOLD '), ('GOLDW', ' GOLD'),
       ('SHOP', 'SHOP'), ('BUYHINT', 'A BUY: TO WAGON'), ('ABUY', 'A  TO BUY'),
-      ('CONTINUE', 'CONTINUE CH '), ('NEWGAME', 'NEW GAME'), ('SNDON', 'B SND ON'), ('SNDOFF', 'B SND OFF')]
+      ('CONTINUE', 'CONTINUE CH '), ('NEWGAME', 'NEW GAME'), ('SNDON', 'B SND ON'), ('SNDOFF', 'B SND OFF'),
+      ('LV', 'LV'), ('MV', 'MV '), ('X2', 'X2'), ('DASH', '--'),
+      ('RANK0', 'BELLWRIGHT'), ('RANK1', "HOLLIN'S WARDEN"), ('RANK2', 'CAPTAIN'),
+      ('RANK3', 'SELLSWORD'), ('RANK4', 'SURVIVOR')]
 
 NAME_ID = {n[0]: i for i, n in enumerate(G.NAMES)}
 CLASS_ID = {c[0]: i for i, c in enumerate(G.CLASSES)}
@@ -200,7 +204,9 @@ def parse(path):
             ch['villages'][-1]['flag'] = flag_number(line.split(':', 1)[1], where)
         elif sec and (sec.startswith('scene:') or sec == 'village'):
             if ':' not in line: raise ChapterError(f"{where}: dialogue lines look like 'NAME: text'")
-            who, text = line.split(':', 1)
+            m = re.match(r'^((?:\[[^\]]*\]\s*)*[^:\[]*):(.*)$', line)   # [FELL:X] conditions hold colons too
+            if not m: raise ChapterError(f"{where}: a scene line is SPEAKER: text")
+            who, text = m.group(1), m.group(2)
             (ch['villages'][-1]['lines'] if sec == 'village' else ch['scenes'][sec[6:]]).append((who.strip(), text.strip(), where))
         else:
             raise ChapterError(f"{where}: don't know what this line is: '{line}'")
@@ -208,26 +214,36 @@ def parse(path):
 
 
 def line_condition(tok, where):
-    """[14] flag 14 set, [!14] not set, [HESK] Hesk in the army, [!HESK] not."""
+    """[14] flag 14 set, [!14] not set, [HESK] Hesk in the army, [!HESK] not, [FELL:HESK] Hesk joined
+    and fell (for endings and the roll of the dead), [!FELL:HESK] he didn't."""
     neg = tok.startswith('!')
     tok = tok.lstrip('!').strip()
-    if tok.isdigit(): c = flag_number(tok, where)
-    elif tok in NAME_ID and 0 < NAME_ID[tok] < G.NUM_HEROES: c = 0x80 | NAME_ID[tok]
-    else: raise ChapterError(f"{where}: a line condition is [N] / [!N] for flag N, or [HERO] / [!HERO] (not the lord)")
+    fell = tok.startswith('FELL:')
+    if fell: tok = tok[5:].strip()
+    if tok.isdigit() and not fell: c = flag_number(tok, where)
+    elif tok in NAME_ID and 0 < NAME_ID[tok] < G.NUM_HEROES: c = 0x80 | (0x20 if fell else 0) | NAME_ID[tok]
+    else: raise ChapterError(f"{where}: a line condition is [N] / [!N] for flag N, [HERO] / [!HERO], or [FELL:HERO] (not the lord)")
     return c | (0x40 if neg else 0)
 
 
+GUARD = 255                                    # speaker id of a guard line: no text, just a condition
+
+
 def scene_bytes(lines):
-    b = bytes([len(lines)])
+    b, n = b'', 0
     for who, text, where in lines:
-        cond = 0
-        m = re.match(r'^\[([^\]]+)\]\s*(.*)$', who)
-        if m: cond, who = line_condition(m.group(1), where), m.group(2).strip()
+        conds = []
+        while True:                            # [A][B] SPEAKER: every condition must hold
+            m = re.match(r'^\[([^\]]+)\]\s*(.*)$', who)
+            if not m: break
+            conds.append(line_condition(m.group(1), where)); who = m.group(2).strip()
         if who not in NAME_ID: raise ChapterError(f"{where}: unknown speaker '{who}' -- add it to game_data.NAMES")
         if G.NAMES[NAME_ID[who]][1] is None: raise ChapterError(f"{where}: {who} has no portrait, so can't speak")
         t = wrap_check(text, where).encode('ascii')
-        b += bytes([cond, NAME_ID[who], len(t)]) + t
-    return b
+        for c in conds[:-1]: b += bytes([c, GUARD, 0]); n += 1
+        b += bytes([conds[-1] if conds else 0, NAME_ID[who], len(t)]) + t; n += 1
+    if n > 255: raise ChapterError(f"{lines[0][2]}: a scene holds at most 255 lines (each extra [condition] is one)")
+    return bytes([n]) + b
 
 
 def compile_event(e, unit_of, walkable, groups, where):
@@ -484,12 +500,13 @@ def compile_chapter(path, last_number):
                      requires=requires, number=number, sets=sorted(sets))
 
 
-def write_story_h(n_chapters):
+def write_story_h(n_chapters, side_flags):
     L = ["// Generated by tools/chapters/make_chapters.py from game_data.py -- edit those, not this.",
          "#pragma once", "#include <avr/pgmspace.h>", "",
          f"const uint8_t NUM_HEROES = {G.NUM_HEROES};", f"const uint8_t NUM_CHAPTERS = {n_chapters};",
          f"const uint8_t MAX_ENEMIES = {MAX_ENEMIES};", f"const uint8_t PROMOTE_LEVEL = {G.PROMOTE_LEVEL};",
-         f"const uint8_t NUM_CLASSES = {len(G.CLASSES)};", "",
+         f"const uint8_t NUM_CLASSES = {len(G.CLASSES)};",
+         f"const uint16_t SIDE_FLAGS = 0x{side_flags:04X};   // the story flags that open side chapters (the record counts them)", "",
          "enum Kind : uint8_t { " + ", ".join(f"K_{k}" for k in G.KINDS) + ", K_NONE = 255 };",
          "enum Cls : uint8_t { " + ", ".join(f"C_{c[0].replace(' ', '_')}" for c in G.CLASSES) + " };",
          "enum : uint8_t { F_ALIVE = 1, F_ENEMY = 2, F_MOVED = 4, F_HOLD = 8, F_LORD = 16, F_BOSS = 32, F_FALLEN = 64, F_JOINED = 128 };",
@@ -604,7 +621,7 @@ def main():
     with open(a.bin, 'wb') as f: f.write(blob)
     if not a.no_header:
         with open(os.path.join(ROOT, 'fxdata', 'chapters.json'), 'w') as f: json.dump([m for _, m in chs], f, indent=1)
-        write_story_h(len(chs))
+        write_story_h(len(chs), sum(1 << (m['requires'] - 1) for _, m in chs if m['requires']))
         write_strings()
     for (rec, m) in chs:
         print(f"  {m['file']}: '{m['title']}' -- {len(rec)} bytes")

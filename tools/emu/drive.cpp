@@ -15,9 +15,17 @@ static void setPins() {
   E->core_state.cpu.data[reg::addr::PINE] = pine_;
   E->core_state.cpu.data[reg::addr::PINF] = pinf_;
 }
-static void run(uint64_t ms) {
+static uint64_t toggles, lastSpk, sampleN;
+static uint64_t firstT, lastT;
+static uint16_t minSp = 0xFFFF; static uint32_t minPc; static uint64_t minCyc;
+static void run(uint64_t ms) {                         // also counts speaker-pin (PC6) toggles
   uint64_t end = E->core_state.cpu.cycle_count + ms * 16000ULL;
-  while (E->core_state.cpu.cycle_count < end) { setPins(); E->cycle(); }
+  while (E->core_state.cpu.cycle_count < end) {
+    setPins(); E->cycle();
+    uint16_t sp = E->core_state.cpu.sp(); if (sp < minSp && sp > 0x200 && E->core_state.cpu.cycle_count > 100000) { minSp = sp; minPc = E->core_state.cpu.pc * 2; minCyc = E->core_state.cpu.cycle_count; }
+    uint8_t spk = (E->core_state.cpu.data[reg::addr::PORTC] >> 6) & 1;
+    if (spk != lastSpk) { if (!toggles) firstT = E->core_state.cpu.cycle_count; toggles++; lastT = E->core_state.cpu.cycle_count; lastSpk = spk; }
+  }
 }
 static void release() {
   pinb_ = reg::bit::PINB::PINB4; pine_ = reg::bit::PINE::PINE6;
@@ -52,6 +60,19 @@ int main(int argc, char** argv) {
     char c = t[0];
     if (c == 'w') run(std::stoull(t.substr(1)));
     else if (c == 's') shot(t.substr(1));
+    else if (c == 'X') {                               // X: power-cycle with EEPROM wiped (another game wrote it); FX flash kept
+      E->reset(); E->core_state.cpu.enabled_autobreaks.reset(); E->debugger_state.paused = false; release();
+      printf("reset: EEPROM wiped\n");
+    }
+    else if (c == 'E') {                               // E: dump the save header bytes (EEPROM 80..85)
+      auto& e = E->core_state.cpu.eeprom; printf("eeprom 80..85: %02x %02x %02x %02x %02x %02x\n", e[80], e[81], e[82], e[83], e[84], e[85]);
+    }
+    else if (c == 'P') printf("lowest stack pointer: %04x at pc %05x (cycle %llu)\n", minSp, minPc, (unsigned long long)minCyc);
+    else if (c == 't') {                               // t: report and reset the speaker toggle count
+      double sec = (lastT - firstT) / 16e6;
+      printf("speaker: %llu toggles over %.3f s (~%.0f Hz)\n", (unsigned long long)toggles, sec, sec > 0 ? toggles / 2.0 / sec : 0.0);
+      toggles = 0;
+    }
     else {
       release();
       if (c == 'A') pine_ &= ~reg::bit::PINE::PINE6;

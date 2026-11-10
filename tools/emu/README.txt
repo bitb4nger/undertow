@@ -14,4 +14,8 @@ Build (needs a clone of github.com/tiberiusbrown/Ardens with submodules in ARDEN
 Run:  ./drive <hex> <fxdata.bin> <d1|e2> "<script>"
   d1 = original Arduboy FX flash pin (Ardens default), e2 = FX-C / Mini
   script: wMS wait · A B U D L R tap a button · sNAME save NAME.pbm
+          t  speaker (PC6) toggles since the last t, and the pitch they make
+          P  the lowest stack pointer seen (and where), for the RAM budget
+          X  power-cycle with EEPROM wiped (as if another game wrote it): the FX save copy should
+             put the save back -- E dumps the save's first bytes (EEPROM 80..85) to check
   ./shots.sh <hex> <bin> <port> <prefix>   boots, starts a game, walks into the map

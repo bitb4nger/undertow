@@ -394,6 +394,8 @@ CAST = {
     'thane':   dict(hair='bald', beard=True, robe=True, far_hand=lambda p, s: (s[0] + 3, s[1] + 9), near=near_staff),
     'hesk':    dict(hair='wild', beard=True, scar=True, build=2, bare=True, far_hand=lambda p, s: (s[0] + 4, s[1] + 9) if p == 'idle' else (s[0] + 8, s[1] + 4),
                     near=near_axe, lean_strike=5),
+    'oda':     dict(hair='bald', beard=True, build=2, robe=True, far_hand=lambda p, s: (s[0] + 4, s[1] + 9) if p == 'idle' else (s[0] + 8, s[1] + 4),
+                    near=near_axe, lean_strike=4),                       # the bellwright: an apron, a smith's hammer
     'aldric':  dict(hair='short', dark=True, crown=True, beard=True, armor=True, cape=True, build=1, shield='kite',
                     far_hand=far_shield, near=near_lance, lean_strike=2),
 }
@@ -593,4 +595,13 @@ def island_frames():
     out += [(f'hesk_{p}', draw_person('hesk', p, False)) for p in ('idle', 'strike')]
     out += [(f'hesk_foe_{p}', mirrored(draw_person('hesk', p, False))) for p in ('idle', 'strike')]
     out += [(f'lir_{p}', demons.drowned(p)) for p in ('idle', 'strike')]    # drawn facing right already
+    return out
+
+
+def finale_frames():
+    """Figures 32-33: Oda (a hero, the last bellwright), Nhal (what waits under the cathedral)."""
+    import demons
+    out = [(f'oda_{p}', draw_person('oda', p, False)) for p in ('idle', 'strike')]
+    for p in ('idle', 'strike'):
+        m = C(W, H); m.paste(demons.nhal(p), 0, 0, mirror=True); out.append((f'nhal_{p}', m))
     return out
