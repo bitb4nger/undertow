@@ -10,8 +10,13 @@ image_t shields = "gfx/shields_32x40.png"
 image_t portraits = "gfx/portraits_56x64.png"
 image_t chapter = "gfx/chapter_128x64.png"
 image_t title = "gfx/title.png"
+image_t pages = "gfx/pages_128x64.png"
+image_t card = "gfx/card.png"
 raw_t font = "font.bin"
 raw_t strings = "strings.bin"
 raw_t tables = "tables.bin"
 raw_t chapters = "chapters.bin"
 namespace_end
+
+savesection
+uint8_t 0xFF

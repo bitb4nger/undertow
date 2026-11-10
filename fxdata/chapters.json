@@ -243,5 +243,62 @@
   "requires": 0,
   "number": 18,
   "sets": []
+ },
+ {
+  "title": "SWAMP OF DEATH",
+  "goal": "CROSS THE MARSH",
+  "file": "25_swamp_of_death.txt",
+  "label": "19",
+  "requires": 0,
+  "number": 19,
+  "sets": [
+   7
+  ]
+ },
+ {
+  "title": "THE GREAT BELL",
+  "goal": "HOLD THE FOUNDRY",
+  "file": "26_legendary_hope.txt",
+  "label": "19X",
+  "requires": 7,
+  "number": 19,
+  "sets": [
+   14
+  ]
+ },
+ {
+  "title": "THE LONG RAIN",
+  "goal": "SURVIVE 10 TURNS",
+  "file": "27_slog_of_despair.txt",
+  "label": "20",
+  "requires": 0,
+  "number": 20,
+  "sets": [
+   18
+  ]
+ },
+ {
+  "title": "BLOOD FORTRESS",
+  "goal": "SLAY THE KING",
+  "file": "28_fortress_of_blood.txt",
+  "label": "21",
+  "requires": 0,
+  "number": 21,
+  "sets": [
+   18
+  ]
+ },
+ {
+  "title": "DEMON PORTAL",
+  "goal": "SEAL THE PORTAL",
+  "file": "29_demon_portal.txt",
+  "label": "22",
+  "requires": 0,
+  "number": 22,
+  "sets": [
+   17,
+   19,
+   20
+  ]
  }
 ]
